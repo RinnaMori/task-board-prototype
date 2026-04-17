@@ -8,143 +8,85 @@ import type {
   Task,
   TaskColor,
   UpdateTaskInput,
+  Project,
 } from "@/types/dashboard";
+
 import { MemberColumn } from "./MemberColumn";
 import { DashboardHeader } from "./DashboardHeader";
 import { TaskAddModal } from "./TaskAddModal";
 import { TaskEditModal } from "./TaskEditModal";
+import { MemberAddModal } from "./MemberAddModal";
+import { ProjectAddModal } from "./ProjectAddModal";
 
-const colorToAccentMap: Record<TaskColor, string> = {
-  blue: "bg-blue-500",
-  green: "bg-green-500",
-  orange: "bg-orange-500",
-  purple: "bg-purple-500",
-  red: "bg-red-500",
-  yellow: "bg-yellow-400",
-  cyan: "bg-cyan-500",
+const projectColorMap: Record<string, { color: TaskColor; accentColor: string }> = {
+  基盤刷新: { color: "blue", accentColor: "bg-blue-500" },
+  管理画面改善: { color: "green", accentColor: "bg-green-500" },
+  調査対応: { color: "orange", accentColor: "bg-orange-500" },
+  データ整備: { color: "cyan", accentColor: "bg-cyan-500" },
+  インフラ改善: { color: "red", accentColor: "bg-red-500" },
+  その他: { color: "slate", accentColor: "bg-slate-500" },
+};
+
+const getProjectColor = (projectName: string) => {
+  return projectColorMap[projectName] ?? projectColorMap["その他"];
+};
+
+const getInitials = (name: string) => {
+  const trimmed = name.trim();
+  if (!trimmed) return "新";
+  return trimmed.slice(0, 1);
 };
 
 export function DashboardBoard() {
   const [selectedRange, setSelectedRange] = useState("今週");
+
   const [members, setMembers] = useState<Member[]>(() => {
     if (typeof window === "undefined") return mockMembers;
 
-    const savedMembers = window.localStorage.getItem("dashboard-members");
-
-    if (!savedMembers) return mockMembers;
-
-    try {
-      return JSON.parse(savedMembers) as Member[];
-    } catch {
-      return mockMembers;
-    }
+    const saved = window.localStorage.getItem("dashboard-members");
+    return saved ? JSON.parse(saved) : mockMembers;
   });
+
+  const [projects, setProjects] = useState<Project[]>([
+    {
+      project_id: "p1",
+      project_name: "基盤刷新",
+      color: "blue",
+      accentColor: "bg-blue-500",
+    },
+    {
+      project_id: "p2",
+      project_name: "管理画面改善",
+      color: "green",
+      accentColor: "bg-green-500",
+    },
+  ]);
+
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [isMemberModalOpen, setIsMemberModalOpen] = useState(false);
+  const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
+
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [filterStatus, setFilterStatus] = useState("all");
   const [search, setSearch] = useState("");
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
-  
+
   useEffect(() => {
-    window.localStorage.setItem("dashboard-members", JSON.stringify(members));
+    localStorage.setItem("dashboard-members", JSON.stringify(members));
   }, [members]);
 
   const visibleMembers = useMemo(() => {
-    return members.map((member) => {
-      const filteredTasks = member.tasks
-        .filter((task) => {
-          if (filterStatus !== "all" && task.status !== filterStatus) {
-            return false;
-          }
-
-          if (
-            search.trim() &&
-            !task.task_name.toLowerCase().includes(search.toLowerCase())
-          ) {
-            return false;
-          }
-
-          return true;
-        })
-        .sort((a, b) => a.due_date.localeCompare(b.due_date));
-
-      return {
-        ...member,
-        tasks: filteredTasks,
-      };
-    });
-  }, [members, filterStatus, search, selectedRange]);
-
-  const handleAddTask = (newTask: NewTaskInput) => {
-    setMembers((prevMembers) =>
-      prevMembers.map((member) => {
-        if (member.member_name !== newTask.assigned_to) return member;
-
-        const createdTask: Task = {
-          task_id: `task-${crypto.randomUUID()}`,
-          task_name: newTask.task_name,
-          status: "未着手",
-          progress_pct: 0,
-          assigned_to: newTask.assigned_to,
-          description: newTask.description,
-          flow_from: "管理者",
-          flow_to: newTask.assigned_to,
-          accentColor: colorToAccentMap[newTask.color],
-          due_date: newTask.due_date,
-          memo: newTask.memo,
-          color: newTask.color,
-          assignment_history: [],
-        };
-
-        return {
-          ...member,
-          tasks: [...member.tasks, createdTask],
-        };
+    return members.map((member) => ({
+      ...member,
+      tasks: member.tasks.filter((task) => {
+        if (filterStatus !== "all" && task.status !== filterStatus) return false;
+        if (search && !task.task_name.includes(search)) return false;
+        return true;
       }),
-    );
-  };
+    }));
+  }, [members, filterStatus, search]);
 
-  const handleDeleteTask = (taskId: string) => {
-    const confirmed = window.confirm("このタスクを削除しますか？");
-    if (!confirmed) return;
-
-    setMembers((prevMembers) =>
-      prevMembers.map((member) => ({
-        ...member,
-        tasks: member.tasks.filter((task) => task.task_id !== taskId),
-      })),
-    );
-  };
-
-  const handleEditTask = (task: Task) => {
-    setEditingTask(task);
-  };
-
-  const handleUpdateTask = (updatedTask: UpdateTaskInput) => {
-    setMembers((prevMembers) =>
-      prevMembers.map((member) => ({
-        ...member,
-        tasks: member.tasks.map((task) => {
-          if (task.task_id !== updatedTask.task_id) return task;
-
-          return {
-            ...task,
-            task_name: updatedTask.task_name,
-            description: updatedTask.description,
-            due_date: updatedTask.due_date,
-            memo: updatedTask.memo,
-            color: updatedTask.color,
-            accentColor: colorToAccentMap[updatedTask.color],
-            status: updatedTask.status,
-            progress_pct: updatedTask.progress_pct,
-          };
-        }),
-      })),
-    );
-
-    setEditingTask(null);
-  };
-
+  // D&D系
   const handleDragStart = (taskId: string) => {
     setDraggingTaskId(taskId);
   };
@@ -156,52 +98,47 @@ export function DashboardBoard() {
   const handleDropTaskToMember = (targetMemberName: string) => {
     if (!draggingTaskId) return;
 
-    setMembers((prevMembers) => {
-      let foundTask: Task | undefined;
-      let sourceMemberName = "";
+    setMembers((prev) => {
+      let movedTask: Task | null = null;
+      let fromMember = "";
 
-      const removedFromSource = prevMembers.map((member) => {
-        const taskInMember = member.tasks.find(
-          (task) => task.task_id === draggingTaskId,
-        );
+      const removed = prev.map((m) => {
+        const found = m.tasks.find((t) => t.task_id === draggingTaskId);
+        if (!found) return m;
 
-        if (!taskInMember) {
-          return member;
-        }
-
-        foundTask = taskInMember;
-        sourceMemberName = member.member_name;
+        movedTask = found;
+        fromMember = m.member_name;
 
         return {
-          ...member,
-          tasks: member.tasks.filter((task) => task.task_id !== draggingTaskId),
+          ...m,
+          tasks: m.tasks.filter((t) => t.task_id !== draggingTaskId),
         };
       });
 
-      if (!foundTask) return prevMembers;
-      if (sourceMemberName === targetMemberName) return prevMembers;
+      if (!movedTask) return prev;
 
-      const updatedTask: Task = {
-        ...foundTask,
-        assigned_to: targetMemberName,
-        flow_from: sourceMemberName,
-        flow_to: targetMemberName,
-        assignment_history: [
-          ...foundTask.assignment_history,
-          {
-            from: sourceMemberName,
-            to: targetMemberName,
-            changed_at: new Date().toLocaleString("ja-JP"),
-          },
-        ],
-      };
-
-      return removedFromSource.map((member) => {
-        if (member.member_name !== targetMemberName) return member;
+      return removed.map((m) => {
+        if (m.member_name !== targetMemberName) return m;
 
         return {
-          ...member,
-          tasks: [...member.tasks, updatedTask],
+          ...m,
+          tasks: [
+            ...m.tasks,
+            {
+              ...movedTask!,
+              assigned_to: targetMemberName,
+              flow_from: fromMember,
+              flow_to: targetMemberName,
+              assignment_history: [
+                ...movedTask!.assignment_history,
+                {
+                  from: fromMember,
+                  to: targetMemberName,
+                  changed_at: new Date().toLocaleString(),
+                },
+              ],
+            },
+          ],
         };
       });
     });
@@ -209,40 +146,170 @@ export function DashboardBoard() {
     setDraggingTaskId(null);
   };
 
+  // ===== その他 =====
+  const handleDeleteTask = (taskId: string) => {
+    setMembers((prev) =>
+      prev.map((m) => ({
+        ...m,
+        tasks: m.tasks.filter((t) => t.task_id !== taskId),
+      }))
+    );
+  };
+
+  const handleEditTask = (task: Task) => {
+    setEditingTask(task);
+  };
+
+  const handleAddTask = (newTask: any) => {
+    const projectColor = getProjectColor(newTask.project_name);
+
+    setMembers((prev) =>
+      prev.map((m) => {
+        if (m.member_name !== newTask.assignee) return m;
+
+        return {
+          ...m,
+          tasks: [
+            ...m.tasks,
+            {
+              task_id: crypto.randomUUID(),
+
+              task_name: newTask.task_name,
+              project_name: newTask.project_name,
+
+              status: "未着手",
+              progress_pct: 0,              
+              manager: newTask.manager,
+              leader: newTask.leader,
+              assignee: newTask.assignee,
+              capacity_pct: newTask.capacity_pct,
+
+              assigned_to: newTask.assignee,
+
+              description: newTask.description,
+
+              flow_from: newTask.manager,
+              flow_to: newTask.assignee,
+
+              accentColor: projectColor.accentColor,
+              color: projectColor.color,
+
+              due_date: newTask.due_date,
+              memo: newTask.memo,
+
+              assignment_history: [],
+            },
+          ],
+        };
+      })
+    );
+  };
+
+  const handleUpdateTask = (updatedTask: UpdateTaskInput) => {
+    setMembers((prev) =>
+      prev.map((member) => ({
+        ...member,
+        tasks: member.tasks.map((task) => {
+          if (task.task_id !== updatedTask.task_id) return task;
+
+          return {
+            ...task,
+
+            task_name: updatedTask.task_name,
+            project_name: updatedTask.project_name,
+            description: updatedTask.description,
+            due_date: updatedTask.due_date,
+            memo: updatedTask.memo,
+
+            status: updatedTask.status,
+            progress_pct: updatedTask.progress_pct,
+            manager: updatedTask.manager,
+            leader: updatedTask.leader,
+            assignee: updatedTask.assignee,
+            capacity_pct: updatedTask.capacity_pct,
+
+            assigned_to: updatedTask.assignee,
+          };
+        }),
+      }))
+    );
+
+    setEditingTask(null);
+  };
+
+  const handleAddMember = (input: any) => {
+    setMembers((prev) => [
+      ...prev,
+      {
+        member_id: crypto.randomUUID(),
+        member_name: input.member_name,
+        initials: input.member_name.slice(0, 1),
+        capacity_pct: 0,
+        capacity_label: "0 / 100",
+        columnColor: input.columnColor,
+        tasks: [],
+      },
+    ]);
+  };
+
+  const handleAddProject = (input: {
+    project_name: string;
+    color: TaskColor;
+  }) => {
+    const accentMap: Record<TaskColor, string> = {
+      blue: "bg-blue-500",
+      green: "bg-green-500",
+      orange: "bg-orange-500",
+      purple: "bg-purple-500",
+      red: "bg-red-500",
+      cyan: "bg-cyan-500",
+      slate: "bg-slate-500",
+    };
+
+    setProjects((prev) => [
+      ...prev,
+      {
+        project_id: crypto.randomUUID(),
+        project_name: input.project_name,
+        color: input.color,
+        accentColor: accentMap[input.color],
+      },
+    ]);
+  };
+
   return (
     <>
-      <div className="space-y-6">
-        <DashboardHeader
-          selectedRange={selectedRange}
-          onChangeRange={setSelectedRange}
-          onOpenTaskModal={() => setIsTaskModalOpen(true)}
-          filterStatus={filterStatus}
-          onChangeStatus={setFilterStatus}
-          search={search}
-          onChangeSearch={setSearch}
-        />
+      <DashboardHeader
+        selectedRange={selectedRange}
+        onChangeRange={setSelectedRange}
+        onOpenTaskModal={() => setIsTaskModalOpen(true)}
+        onOpenMemberModal={() => setIsMemberModalOpen(true)}
+        onOpenProjectModal={() => setIsProjectModalOpen(true)}
+        filterStatus={filterStatus}
+        onChangeStatus={setFilterStatus}
+        search={search}
+        onChangeSearch={setSearch}
+      />
 
-        <div className="overflow-x-auto pb-4">
-          <div className="flex min-w-max gap-4 px-1 pt-1">
-            {visibleMembers.map((member) => (
-              <MemberColumn
-                key={member.member_id}
-                member={member}
-                onEditTask={handleEditTask}
-                onDeleteTask={handleDeleteTask}
-                onDropTask={handleDropTaskToMember}
-                draggingTaskId={draggingTaskId}
-                onDragStartTask={handleDragStart}
-                onDragEndTask={handleDragEnd}
-              />
-            ))}
-          </div>
-        </div>
+      <div className="flex gap-4 overflow-x-auto p-4">
+        {visibleMembers.map((member) => (
+          <MemberColumn
+            key={member.member_id}
+            member={member}
+            onEditTask={handleEditTask}
+            onDeleteTask={handleDeleteTask}
+            onDropTask={handleDropTaskToMember}
+            draggingTaskId={draggingTaskId}
+            onDragStartTask={handleDragStart}
+            onDragEndTask={handleDragEnd}
+          />
+        ))}
       </div>
 
       <TaskAddModal
         isOpen={isTaskModalOpen}
         members={members}
+        projects={projects}
         onClose={() => setIsTaskModalOpen(false)}
         onSubmit={handleAddTask}
       />
@@ -250,8 +317,22 @@ export function DashboardBoard() {
       <TaskEditModal
         isOpen={Boolean(editingTask)}
         task={editingTask}
+        projects={projects}
+        members={members}
         onClose={() => setEditingTask(null)}
-        onSubmit={handleUpdateTask}
+        onSubmit={() => { }}
+      />
+
+      <MemberAddModal
+        isOpen={isMemberModalOpen}
+        onClose={() => setIsMemberModalOpen(false)}
+        onSubmit={handleAddMember}
+      />
+
+      <ProjectAddModal
+        isOpen={isProjectModalOpen}
+        onClose={() => setIsProjectModalOpen(false)}
+        onSubmit={handleAddProject}
       />
     </>
   );

@@ -6,8 +6,8 @@ export type TaskColor =
     | "orange"
     | "purple"
     | "red"
-    | "yellow"
-    | "cyan";
+    | "cyan"
+    | "slate";
 
 export type AssignmentHistoryItem = {
     from: string;
@@ -18,16 +18,27 @@ export type AssignmentHistoryItem = {
 export type Task = {
     task_id: string;
     task_name: string;
+    project_name: string;
     status: TaskStatus;
     progress_pct: number;
+
+    manager: string;
+    leader: string;
+    assignee: string;
+    capacity_pct: number;
+
     assigned_to: string;
+
     description: string;
     flow_from: string;
     flow_to: string;
+
     accentColor: string;
+    color: TaskColor;
+
     due_date: string;
     memo: string;
-    color: TaskColor;
+
     assignment_history: AssignmentHistoryItem[];
 };
 
@@ -41,22 +52,40 @@ export type Member = {
     tasks: Task[];
 };
 
+export type Project = {
+    project_id: string;
+    project_name: string;
+    color: TaskColor;
+    accentColor: string;
+};
+
 export type NewTaskInput = {
     task_name: string;
+    project_name: string;
     description: string;
     assigned_to: string;
+
+    manager: string;
+    leader: string;
+    assignee: string;
+    capacity_pct: number;
+
     due_date: string;
     memo: string;
-    color: TaskColor;
 };
 
 export type UpdateTaskInput = {
     task_id: string;
     task_name: string;
+    project_name: string;
     description: string;
     due_date: string;
     memo: string;
-    color: TaskColor;
     status: TaskStatus;
     progress_pct: number;
+
+    manager: string;
+    leader: string;
+    assignee: string;
+    capacity_pct: number;
 };

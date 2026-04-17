@@ -54,51 +54,46 @@ export function MemberColumn({
                 setIsDragOver(false);
                 onDropTask(member.member_name);
             }}
-            className={`flex h-[720px] w-[248px] shrink-0 flex-col rounded-[26px] border border-slate-200 border-t-4 p-4 shadow-sm transition ${isDragOver ? "bg-sky-50 ring-2 ring-sky-300" : "bg-slate-50"
+            className={`flex h-[720px] w-[248px] shrink-0 flex-col rounded-[22px] border border-slate-200 border-t-4 px-3 py-3 shadow-sm transition ${isDragOver ? "bg-sky-50 ring-2 ring-sky-300" : "bg-slate-50"
                 } ${member.columnColor}`}
         >
-            <div className="mb-4">
-                <div className="mb-4 flex items-start justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-3">
+            <div className="mb-3">
+                <div className="mb-3 flex items-start justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2.5">
                         <div
-                            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-base font-bold ${avatarColor}`}
+                            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold ${avatarColor}`}
                         >
                             {member.initials}
                         </div>
 
                         <div className="min-w-0">
-                            <h2 className="truncate text-lg font-bold tracking-tight text-slate-900">
+                            <h2 className="truncate text-base font-bold tracking-tight text-slate-900">
                                 {member.member_name}
                             </h2>
                         </div>
                     </div>
 
                     <div className="shrink-0 text-right">
-                        <p className="text-[11px] font-semibold text-slate-500">
-                            キャパシティ
+                        <p className="text-[10px] font-semibold text-slate-500">
+                            キャパ
                         </p>
-                        <p className="text-2xl font-extrabold leading-none text-slate-900">
+                        <p className="text-xl font-extrabold leading-none text-slate-900">
                             {member.capacity_pct}%
                         </p>
                     </div>
                 </div>
 
-                <div className="mb-2.5">
+                <div className="mb-2">
                     <ProgressBar value={member.capacity_pct} colorClass={progressColor} />
                 </div>
 
-                <div className="mb-4 flex justify-end">
-                    <span className="text-xs font-semibold text-slate-500">
-                        {member.capacity_label}
-                    </span>
-                </div>
-
-                <div className="inline-flex rounded-xl bg-slate-200 px-3 py-2 text-xs font-bold text-slate-700">
-                    タスク数: {member.tasks.length}
+                <div className="mb-3 flex justify-between gap-2 text-[10px] font-semibold text-slate-500">
+                    <span>{member.capacity_label}</span>
+                    <span>件数: {member.tasks.length}</span>
                 </div>
             </div>
 
-            <div className="flex-1 space-y-3 overflow-y-auto pr-1">
+            <div className="flex-1 space-y-2 overflow-y-auto pr-1">
                 {member.tasks.length > 0 ? (
                     member.tasks.map((task) => (
                         <TaskCard
@@ -112,8 +107,8 @@ export function MemberColumn({
                         />
                     ))
                 ) : (
-                    <div className="rounded-2xl border border-dashed border-slate-300 bg-white/70 p-5 text-center text-xs font-medium text-slate-400">
-                        ここにドロップできます
+                    <div className="rounded-xl border border-dashed border-slate-300 bg-white/70 p-4 text-center text-[11px] font-medium text-slate-400">
+                        ここにドロップ
                     </div>
                 )}
             </div>

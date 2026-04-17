@@ -10,12 +10,8 @@ type TaskCardProps = {
     onDragEnd: () => void;
 };
 
-const memoLimitLabel = (memo: string) => {
-    if (memo.length <= 30) return memo;
-    return `${memo.slice(0, 30)}...`;
-};
-
 const getDueDateTextColor = (dueDate: string, status: Task["status"]) => {
+    if (!dueDate) return "text-slate-400";
     if (status === "完了") return "text-slate-500";
 
     const today = new Date();
@@ -33,6 +29,10 @@ const getDueDateTextColor = (dueDate: string, status: Task["status"]) => {
     return "text-slate-500";
 };
 
+const getDueDateLabel = (dueDate: string) => {
+    return dueDate || "未設定";
+};
+
 export function TaskCard({
     task,
     onEdit,
@@ -41,98 +41,91 @@ export function TaskCard({
     onDragStart,
     onDragEnd,
 }: TaskCardProps) {
+    const latestHistory =
+        task.assignment_history[task.assignment_history.length - 1];
+
     return (
         <article
             draggable
             onDragStart={onDragStart}
             onDragEnd={onDragEnd}
-            className={`cursor-grab rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm transition active:cursor-grabbing ${isDragging ? "opacity-40" : "opacity-100"
+            className={`cursor-grab rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm transition active:cursor-grabbing ${isDragging ? "opacity-40" : "opacity-100"
                 }`}
         >
-            <div className="mb-3 flex items-start justify-between gap-2">
-                <div className="flex min-w-0 items-center gap-2.5">
+            {/* タイトル + 進捗 */}
+            <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
                     <span
-                        className={`h-2.5 w-2.5 shrink-0 rounded-full ${task.accentColor}`}
-                        aria-hidden="true"
+                        className={`h-2 w-2 shrink-0 rounded-full ${task.accentColor}`}
                     />
-                    <div className="min-w-0">
-                        <h3 className="truncate text-base font-bold leading-none tracking-tight text-slate-900">
-                            {task.task_name}
-                        </h3>
-                    </div>
-                </div>
-
-                <div className="flex shrink-0 items-center gap-2">
-                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">
-                        {task.progress_pct}%
+                    <span className="truncate text-sm font-bold text-slate-900">
+                        {task.task_name || "名称未設定タスク"}
                     </span>
                 </div>
+
+                <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-700">
+                    {task.progress_pct}%
+                </span>
             </div>
 
-            <div className="mb-3 flex flex-col gap-2">
-                <StatusBadge status={task.status} />
+            {/* プロジェクト + 期日 */}
+            <div className="mb-2 flex items-center justify-between gap-2">
+                <span className="truncate rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                    {task.project_name || "その他"}
+                </span>
+
                 <span
-                    className={`text-[11px] font-semibold ${getDueDateTextColor(
+                    className={`shrink-0 text-[10px] font-semibold ${getDueDateTextColor(
                         task.due_date,
                         task.status,
                     )}`}
                 >
-                    期日: {task.due_date}
+                    {getDueDateLabel(task.due_date)}
                 </span>
             </div>
 
-            <p className="mb-3 text-xs font-medium leading-5 text-slate-600">
-                {task.description}
+            {/* ステータス */}
+            <div className="mb-1 flex items-center justify-between gap-2">
+                <StatusBadge status={task.status} />
+
+                <div className="text-[10px] text-slate-500 mt-1">
+                    M: {task.manager} / L: {task.leader}
+                </div>
+
+                <div className="text-[10px] text-slate-500">
+                    負荷: {task.capacity_pct}%
+                </div>
+
+                <div className="flex gap-1">
+                    <button
+                        type="button"
+                        onClick={() => onEdit(task)}
+                        className="rounded-md px-1.5 py-1 text-[10px] text-slate-500 hover:bg-slate-100"
+                    >
+                        編集
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={() => onDelete(task.task_id)}
+                        className="rounded-md px-1.5 py-1 text-[10px] text-red-400 hover:bg-red-50"
+                    >
+                        削除
+                    </button>
+                </div>
+            </div>
+
+            {/* 内容（1行だけ） */}
+            <p className="truncate text-[11px] text-slate-500">
+                {task.description || "内容未設定"}
             </p>
 
-            <div className="mb-3 rounded-xl bg-slate-50 px-3 py-2.5">
-                <p className="text-[11px] font-semibold text-slate-500">メモ</p>
-                <p className="mt-1 text-xs leading-5 text-slate-700">
-                    {memoLimitLabel(task.memo)}
+            {/* 担当者遍歴（直近1件） */}
+            {latestHistory && (
+                <p className="mt-1 text-[10px] text-slate-400">
+                    {latestHistory.from} → {latestHistory.to}
                 </p>
-            </div>
-
-            <div className="space-y-1.5 text-xs leading-5 text-slate-500">
-                <p>
-                    <span className="font-medium text-slate-600">担当者:</span>{" "}
-                    {task.assigned_to}
-                </p>
-                <p>
-                    <span className="font-medium text-slate-600">差配:</span>{" "}
-                    {task.flow_from} → {task.flow_to}
-                </p>
-            </div>
-
-            {task.assignment_history.length > 0 && (
-                <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2.5">
-                    <p className="text-[11px] font-semibold text-slate-500">担当者遍歴</p>
-                    <div className="mt-1 space-y-1">
-                        {task.assignment_history.map((history, index) => (
-                            <p key={`${history.changed_at}-${index}`} className="text-[11px] leading-4 text-slate-600">
-                                {history.from} → {history.to}
-                            </p>
-                        ))}
-                    </div>
-                </div>
             )}
-
-            <div className="mt-2 flex gap-1.5">
-                <button
-                    type="button"
-                    onClick={() => onEdit(task)}
-                    className="rounded-md px-1.5 py-1 text-[10px] font-medium text-slate-500 transition hover:bg-slate-100"
-                >
-                    編集
-                </button>
-
-                <button
-                    type="button"
-                    onClick={() => onDelete(task.task_id)}
-                    className="rounded-md px-1.5 py-1 text-[10px] font-medium text-red-400 transition hover:bg-red-50"
-                >
-                    削除
-                </button>
-            </div>
         </article>
     );
 }

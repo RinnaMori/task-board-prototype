@@ -1,37 +1,39 @@
 "use client";
 
 import { useState } from "react";
-import type { Member, NewTaskInput, TaskColor } from "@/types/dashboard";
+import type {
+    Member,
+    NewTaskInput,
+    Project,
+} from "@/types/dashboard";
 
 type TaskAddModalProps = {
     isOpen: boolean;
     members: Member[];
+    projects: Project[];
     onClose: () => void;
     onSubmit: (task: NewTaskInput) => void;
 };
 
-const colorOptions: { value: TaskColor; label: string }[] = [
-    { value: "blue", label: "青" },
-    { value: "green", label: "緑" },
-    { value: "orange", label: "橙" },
-    { value: "purple", label: "紫" },
-    { value: "red", label: "赤" },
-    { value: "yellow", label: "黄" },
-    { value: "cyan", label: "水色" },
-];
-
 const initialForm = (members: Member[]): NewTaskInput => ({
     task_name: "",
+    project_name: "",
     description: "",
     assigned_to: members[0]?.member_name ?? "",
+
+    manager: members[0]?.member_name ?? "",
+    leader: members[0]?.member_name ?? "",
+    assignee: members[0]?.member_name ?? "",
+    capacity_pct: 0,
+
     due_date: "",
     memo: "",
-    color: "blue",
 });
 
 export function TaskAddModal({
     isOpen,
     members,
+    projects,
     onClose,
     onSubmit,
 }: TaskAddModalProps) {
@@ -41,7 +43,7 @@ export function TaskAddModal({
 
     const handleChange = (
         key: keyof NewTaskInput,
-        value: string | TaskColor,
+        value: string | number,
     ) => {
         setForm((prev) => ({
             ...prev,
@@ -52,16 +54,21 @@ export function TaskAddModal({
     const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
 
-        if (!form.task_name.trim()) return;
-        if (!form.description.trim()) return;
-        if (!form.assigned_to) return;
-        if (!form.due_date) return;
-        if (!form.memo.trim()) return;
+        const fallbackMember = members[0]?.member_name ?? "未設定";
 
         onSubmit({
-            ...form,
-            task_name: form.task_name.trim(),
+            task_name: form.task_name.trim() || "名称未設定タスク",
+            project_name: form.project_name || "その他",
             description: form.description.trim(),
+
+            assigned_to: form.assigned_to || form.assignee || fallbackMember,
+
+            manager: form.manager || fallbackMember,
+            leader: form.leader || fallbackMember,
+            assignee: form.assignee || form.assigned_to || fallbackMember,
+            capacity_pct: Number(form.capacity_pct) || 0,
+
+            due_date: form.due_date,
             memo: form.memo.trim().slice(0, 30),
         });
 
@@ -83,7 +90,7 @@ export function TaskAddModal({
                             タスク追加
                         </h2>
                         <p className="mt-1 text-sm font-medium text-slate-500">
-                            内容を入力すると、選択した担当者のパネルに追加されます
+                            プロジェクトごとに色が自動で統一されます
                         </p>
                     </div>
 
@@ -107,7 +114,7 @@ export function TaskAddModal({
                                 value={form.task_name}
                                 onChange={(e) => handleChange("task_name", e.target.value)}
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
-                                placeholder="例: 要件定義レビュー"
+                                placeholder="未入力なら自動で仮名を入れます"
                                 maxLength={20}
                             />
                         </label>
@@ -118,7 +125,10 @@ export function TaskAddModal({
                             </span>
                             <select
                                 value={form.assigned_to}
-                                onChange={(e) => handleChange("assigned_to", e.target.value)}
+                                onChange={(e) => {
+                                    handleChange("assigned_to", e.target.value);
+                                    handleChange("assignee", e.target.value);
+                                }}
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                             >
                                 {members.map((member) => (
@@ -130,20 +140,25 @@ export function TaskAddModal({
                         </label>
                     </div>
 
-                    <label className="block">
-                        <span className="mb-2 block text-sm font-bold text-slate-700">
-                            内容
-                        </span>
-                        <textarea
-                            value={form.description}
-                            onChange={(e) => handleChange("description", e.target.value)}
-                            className="min-h-[110px] w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
-                            placeholder="タスク内容を入力"
-                            maxLength={150}
-                        />
-                    </label>
-
                     <div className="grid gap-5 md:grid-cols-2">
+                        <label className="block">
+                            <span className="mb-2 block text-sm font-bold text-slate-700">
+                                プロジェクト
+                            </span>
+                            <select
+                                value={form.project_name}
+                                onChange={(e) => handleChange("project_name", e.target.value)}
+                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
+                            >
+                                <option value="">プロジェクト選択</option>
+                                {projects.map((p) => (
+                                    <option key={p.project_id} value={p.project_name}>
+                                        {p.project_name}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+
                         <label className="block">
                             <span className="mb-2 block text-sm font-bold text-slate-700">
                                 期日
@@ -155,26 +170,70 @@ export function TaskAddModal({
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                             />
                         </label>
+                    </div>
 
+                    <div className="grid gap-5 md:grid-cols-3">
                         <label className="block">
                             <span className="mb-2 block text-sm font-bold text-slate-700">
-                                色
+                                Manager
                             </span>
                             <select
-                                value={form.color}
-                                onChange={(e) =>
-                                    handleChange("color", e.target.value as TaskColor)
-                                }
+                                value={form.manager}
+                                onChange={(e) => handleChange("manager", e.target.value)}
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                             >
-                                {colorOptions.map((option) => (
-                                    <option key={option.value} value={option.value}>
-                                        {option.label}
+                                {members.map((m) => (
+                                    <option key={m.member_id} value={m.member_name}>
+                                        {m.member_name}
                                     </option>
                                 ))}
                             </select>
                         </label>
+
+                        <label className="block">
+                            <span className="mb-2 block text-sm font-bold text-slate-700">
+                                Leader
+                            </span>
+                            <select
+                                value={form.leader}
+                                onChange={(e) => handleChange("leader", e.target.value)}
+                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
+                            >
+                                {members.map((m) => (
+                                    <option key={m.member_id} value={m.member_name}>
+                                        {m.member_name}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+
+                        <label className="block">
+                            <span className="mb-2 block text-sm font-bold text-slate-700">
+                                キャパ(%)
+                            </span>
+                            <input
+                                type="number"
+                                value={form.capacity_pct}
+                                onChange={(e) =>
+                                    handleChange("capacity_pct", Number(e.target.value))
+                                }
+                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
+                            />
+                        </label>
                     </div>
+
+                    <label className="block">
+                        <span className="mb-2 block text-sm font-bold text-slate-700">
+                            内容
+                        </span>
+                        <textarea
+                            value={form.description}
+                            onChange={(e) => handleChange("description", e.target.value)}
+                            className="min-h-[110px] w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
+                            placeholder="未入力でも保存できます"
+                            maxLength={150}
+                        />
+                    </label>
 
                     <label className="block">
                         <span className="mb-2 block text-sm font-bold text-slate-700">
@@ -185,7 +244,7 @@ export function TaskAddModal({
                             value={form.memo}
                             onChange={(e) => handleChange("memo", e.target.value.slice(0, 30))}
                             className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
-                            placeholder="例: 優先度高め"
+                            placeholder="空でもOK"
                             maxLength={30}
                         />
                         <span className="mt-2 block text-xs text-slate-400">
@@ -197,14 +256,14 @@ export function TaskAddModal({
                         <button
                             type="button"
                             onClick={handleClose}
-                            className="rounded-2xl border border-slate-200 px-5 py-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+                            className="rounded-2xl border border-slate-200 px-5 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50"
                         >
                             キャンセル
                         </button>
 
                         <button
                             type="submit"
-                            className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white transition hover:bg-slate-700"
+                            className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white hover:bg-slate-700"
                         >
                             追加する
                         </button>
