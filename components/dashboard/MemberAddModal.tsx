@@ -18,11 +18,7 @@ const colorOptions = [
     { label: "紫", value: "border-purple-400" },
 ];
 
-export function MemberAddModal({
-    isOpen,
-    onClose,
-    onSubmit,
-}: MemberAddModalProps) {
+export function MemberAddModal({ isOpen, onClose, onSubmit }: MemberAddModalProps) {
     const [memberName, setMemberName] = useState("");
     const [columnColor, setColumnColor] = useState("border-sky-400");
 
@@ -42,22 +38,16 @@ export function MemberAddModal({
             columnColor,
         });
 
-        setMemberName("");
-        setColumnColor("border-sky-400");
-        onClose();
+        handleClose();
     };
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-            <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="w-full max-w-lg rounded-[28px] bg-white p-6 shadow-2xl">
                 <div className="mb-6 flex items-start justify-between gap-4">
                     <div>
-                        <h2 className="text-2xl font-extrabold text-slate-900">
-                            メンバー追加
-                        </h2>
-                        <p className="mt-1 text-sm font-medium text-slate-500">
-                            名前だけでも追加できます
-                        </p>
+                        <h2 className="text-2xl font-extrabold text-slate-900">メンバー追加</h2>
+                        <p className="mt-1 text-sm font-medium text-slate-500">新しい担当者のカラムを追加できます</p>
                     </div>
 
                     <button
@@ -71,26 +61,22 @@ export function MemberAddModal({
 
                 <form className="space-y-5" onSubmit={handleSubmit}>
                     <label className="block">
-                        <span className="mb-2 block text-sm font-bold text-slate-700">
-                            メンバー名
-                        </span>
+                        <span className="mb-2 block text-sm font-bold text-slate-700">メンバー名</span>
                         <input
                             type="text"
                             value={memberName}
-                            onChange={(e) => setMemberName(e.target.value)}
+                            onChange={(event) => setMemberName(event.target.value)}
                             className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
-                            placeholder="例: 佐々木 健"
+                            placeholder="例: インターン C"
                             maxLength={20}
                         />
                     </label>
 
                     <label className="block">
-                        <span className="mb-2 block text-sm font-bold text-slate-700">
-                            パネル色
-                        </span>
+                        <span className="mb-2 block text-sm font-bold text-slate-700">パネル色</span>
                         <select
                             value={columnColor}
-                            onChange={(e) => setColumnColor(e.target.value)}
+                            onChange={(event) => setColumnColor(event.target.value)}
                             className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                         >
                             {colorOptions.map((option) => (

@@ -3,16 +3,13 @@ type ProgressBarProps = {
     colorClass?: string;
 };
 
-export function ProgressBar({
-    value,
-    colorClass = "bg-sky-500",
-}: ProgressBarProps) {
-    const safeValue = Math.max(0, Math.min(100, value));
+export function ProgressBar({ value, colorClass = "bg-slate-900" }: ProgressBarProps) {
+    const safeValue = Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0));
 
     return (
-        <div className="h-3 w-full rounded-full bg-slate-200">
+        <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-200">
             <div
-                className={`h-3 rounded-full transition-all duration-300 ${colorClass}`}
+                className={`h-full rounded-full transition-all ${colorClass}`}
                 style={{ width: `${safeValue}%` }}
             />
         </div>

@@ -37,63 +37,51 @@ export function MemberColumn({
     onDragEndTask,
 }: MemberColumnProps) {
     const progressColor = progressColorMap[member.columnColor] ?? "bg-sky-500";
-    const avatarColor =
-        avatarColorMap[member.columnColor] ?? "bg-slate-100 text-slate-700";
-
+    const avatarColor = avatarColorMap[member.columnColor] ?? "bg-slate-100 text-slate-700";
     const [isDragOver, setIsDragOver] = useState(false);
 
     return (
         <section
-            onDragOver={(e) => {
-                e.preventDefault();
+            onDragOver={(event) => {
+                event.preventDefault();
                 setIsDragOver(true);
             }}
             onDragLeave={() => setIsDragOver(false)}
-            onDrop={(e) => {
-                e.preventDefault();
+            onDrop={(event) => {
+                event.preventDefault();
                 setIsDragOver(false);
                 onDropTask(member.member_name);
             }}
-            className={`flex h-[720px] w-[248px] shrink-0 flex-col rounded-[22px] border border-slate-200 border-t-4 px-3 py-3 shadow-sm transition ${isDragOver ? "bg-sky-50 ring-2 ring-sky-300" : "bg-slate-50"
+            className={`flex h-[720px] w-[296px] shrink-0 flex-col rounded-[24px] border border-slate-200 border-t-4 px-4 py-4 shadow-sm transition ${isDragOver ? "bg-sky-50 ring-2 ring-sky-300" : "bg-slate-50"
                 } ${member.columnColor}`}
         >
-            <div className="mb-3">
+            <div className="mb-4">
                 <div className="mb-3 flex items-start justify-between gap-2">
-                    <div className="flex min-w-0 items-center gap-2.5">
-                        <div
-                            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold ${avatarColor}`}
-                        >
+                    <div className="flex min-w-0 items-center gap-3">
+                        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold ${avatarColor}`}>
                             {member.initials}
                         </div>
-
                         <div className="min-w-0">
-                            <h2 className="truncate text-base font-bold tracking-tight text-slate-900">
-                                {member.member_name}
-                            </h2>
+                            <h2 className="truncate text-base font-bold text-slate-900">{member.member_name}</h2>
+                            <p className="text-xs font-medium text-slate-500">進行中キャパ合計</p>
                         </div>
                     </div>
 
-                    <div className="shrink-0 text-right">
-                        <p className="text-[10px] font-semibold text-slate-500">
-                            キャパ
-                        </p>
-                        <p className="text-xl font-extrabold leading-none text-slate-900">
-                            {member.capacity_pct}%
-                        </p>
+                    <div className="text-right">
+                        <p className="text-[11px] font-semibold text-slate-500">負荷</p>
+                        <p className="text-2xl font-extrabold leading-none text-slate-900">{member.capacity_pct}%</p>
                     </div>
                 </div>
 
-                <div className="mb-2">
-                    <ProgressBar value={member.capacity_pct} colorClass={progressColor} />
-                </div>
+                <ProgressBar value={member.capacity_pct} colorClass={progressColor} />
 
-                <div className="mb-3 flex justify-between gap-2 text-[10px] font-semibold text-slate-500">
+                <div className="mt-2 flex justify-between text-[11px] font-semibold text-slate-500">
                     <span>{member.capacity_label}</span>
-                    <span>件数: {member.tasks.length}</span>
+                    <span>タスク数 {member.tasks.length}</span>
                 </div>
             </div>
 
-            <div className="flex-1 space-y-2 overflow-y-auto pr-1">
+            <div className="flex-1 space-y-3 overflow-y-auto pr-1">
                 {member.tasks.length > 0 ? (
                     member.tasks.map((task) => (
                         <TaskCard
@@ -107,8 +95,8 @@ export function MemberColumn({
                         />
                     ))
                 ) : (
-                    <div className="rounded-xl border border-dashed border-slate-300 bg-white/70 p-4 text-center text-[11px] font-medium text-slate-400">
-                        ここにドロップ
+                    <div className="rounded-2xl border border-dashed border-slate-300 bg-white/80 p-5 text-center text-sm font-medium text-slate-400">
+                        タスクなし / ここにドロップ
                     </div>
                 )}
             </div>

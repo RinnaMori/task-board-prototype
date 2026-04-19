@@ -1,101 +1,73 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { PRIORITY_OPTIONS, STATUS_OPTIONS } from "@/lib/dashboard-store";
 import type {
+    Member,
+    Project,
     Task,
+    TaskPriority,
     TaskStatus,
     UpdateTaskInput,
-    Project,
-    Member,
 } from "@/types/dashboard";
 
 type TaskEditModalProps = {
     isOpen: boolean;
     task: Task | null;
-    projects: Project[];
     members: Member[];
+    projects: Project[];
     onClose: () => void;
-    onSubmit: (task: UpdateTaskInput) => void;
+    onSubmit: (input: UpdateTaskInput) => void;
 };
-
-const statusOptions: TaskStatus[] = ["未着手", "進行中", "完了", "保留"];
-
-type EditFormState = {
-    task_id: string;
-    task_name: string;
-    project_name: string;
-    description: string;
-    due_date: string;
-    memo: string;
-    status: TaskStatus;
-    progress_pct: number;
-
-    manager: string;
-    leader: string;
-    assignee: string;
-    capacity_pct: number;
-};
-
-const createInitialState = (task: Task | null): EditFormState => ({
-    task_id: task?.task_id ?? "",
-    task_name: task?.task_name ?? "",
-    project_name: task?.project_name ?? "",
-    description: task?.description ?? "",
-    due_date: task?.due_date ?? "",
-    memo: task?.memo ?? "",
-    status: task?.status ?? "未着手",
-    progress_pct: task?.progress_pct ?? 0,
-
-    manager: task?.manager ?? "",
-    leader: task?.leader ?? "",
-    assignee: task?.assignee ?? "",
-    capacity_pct: task?.capacity_pct ?? 0,
-});
 
 export function TaskEditModal({
     isOpen,
     task,
-    projects,
     members,
+    projects,
     onClose,
     onSubmit,
 }: TaskEditModalProps) {
-    const [form, setForm] = useState<EditFormState>(createInitialState(task));
+    const [form, setForm] = useState<UpdateTaskInput | null>(null);
 
     useEffect(() => {
-        setForm(createInitialState(task));
+        if (!task) {
+            setForm(null);
+            return;
+        }
+
+        setForm({
+            task_id: task.task_id,
+            task_name: task.task_name,
+            project_name: task.project_name,
+            priority: task.priority,
+            description: task.description,
+            due_date: task.due_date,
+            memo: task.memo,
+            status: task.status,
+            progress_pct: task.progress_pct,
+            manager: task.manager,
+            leader: task.leader,
+            assignee: task.assignee,
+            capacity_pct: task.capacity_pct,
+        });
     }, [task]);
 
-    if (!isOpen || !task) return null;
+    if (!isOpen || !form) return null;
 
-    const handleChange = (
-        key: keyof EditFormState,
-        value: string | number | TaskStatus,
-    ) => {
-        setForm((prev) => ({
-            ...prev,
-            [key]: value,
-        }));
+    const handleChange = <K extends keyof UpdateTaskInput>(key: K, value: UpdateTaskInput[K]) => {
+        setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
     };
 
     const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
-
-        const fallbackMember = members[0]?.member_name ?? "未設定";
+        if (!form) return;
 
         onSubmit({
-            task_id: form.task_id,
+            ...form,
             task_name: form.task_name.trim() || "名称未設定タスク",
-            project_name: form.project_name || "その他",
             description: form.description.trim(),
-            due_date: form.due_date,
-            memo: form.memo.trim().slice(0, 30),
-            status: form.status,
-            progress_pct: Math.max(0, Math.min(100, Number(form.progress_pct) || 0)),
-
-            manager: form.manager || fallbackMember,
-            leader: form.leader || fallbackMember,
-            assignee: form.assignee || fallbackMember,
+            memo: form.memo.trim(),
             capacity_pct: Number(form.capacity_pct) || 0,
         });
 
@@ -104,15 +76,11 @@ export function TaskEditModal({
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-            <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="w-full max-w-3xl rounded-[28px] bg-white p-6 shadow-2xl">
                 <div className="mb-6 flex items-start justify-between gap-4">
                     <div>
-                        <h2 className="text-2xl font-extrabold text-slate-900">
-                            タスク編集
-                        </h2>
-                        <p className="mt-1 text-sm font-medium text-slate-500">
-                            Manager / Leader / 担当者 / キャパを編集できます
-                        </p>
+                        <h2 className="text-2xl font-extrabold text-slate-900">タスク編集</h2>
+                        <p className="mt-1 text-sm font-medium text-slate-500">ステータス・担当者・差配先・キャパまで更新できます</p>
                     </div>
 
                     <button
@@ -127,103 +95,56 @@ export function TaskEditModal({
                 <form className="space-y-5" onSubmit={handleSubmit}>
                     <div className="grid gap-5 md:grid-cols-2">
                         <label className="block">
-                            <span className="mb-2 block text-sm font-bold text-slate-700">
-                                タスク名
-                            </span>
+                            <span className="mb-2 block text-sm font-bold text-slate-700">タスク名</span>
                             <input
                                 type="text"
                                 value={form.task_name}
-                                onChange={(e) => handleChange("task_name", e.target.value)}
+                                onChange={(event) => handleChange("task_name", event.target.value)}
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
-                                maxLength={20}
+                                maxLength={40}
                             />
                         </label>
 
                         <label className="block">
-                            <span className="mb-2 block text-sm font-bold text-slate-700">
-                                プロジェクト
-                            </span>
+                            <span className="mb-2 block text-sm font-bold text-slate-700">プロジェクト</span>
                             <select
                                 value={form.project_name}
-                                onChange={(e) => handleChange("project_name", e.target.value)}
+                                onChange={(event) => handleChange("project_name", event.target.value)}
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                             >
-                                <option value="">プロジェクト選択</option>
-                                {projects.map((p) => (
-                                    <option key={p.project_id} value={p.project_name}>
-                                        {p.project_name}
+                                {projects.map((project) => (
+                                    <option key={project.project_id} value={project.project_name}>
+                                        {project.project_name}
                                     </option>
                                 ))}
                             </select>
                         </label>
                     </div>
 
-                    <div className="grid gap-5 md:grid-cols-3">
+                    <div className="grid gap-5 md:grid-cols-4">
                         <label className="block">
-                            <span className="mb-2 block text-sm font-bold text-slate-700">
-                                Manager
-                            </span>
+                            <span className="mb-2 block text-sm font-bold text-slate-700">優先度</span>
                             <select
-                                value={form.manager}
-                                onChange={(e) => handleChange("manager", e.target.value)}
+                                value={form.priority}
+                                onChange={(event) => handleChange("priority", event.target.value as TaskPriority)}
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                             >
-                                {members.map((m) => (
-                                    <option key={m.member_id} value={m.member_name}>
-                                        {m.member_name}
+                                {PRIORITY_OPTIONS.map((priority) => (
+                                    <option key={priority} value={priority}>
+                                        {priority}
                                     </option>
                                 ))}
                             </select>
                         </label>
 
                         <label className="block">
-                            <span className="mb-2 block text-sm font-bold text-slate-700">
-                                Leader
-                            </span>
-                            <select
-                                value={form.leader}
-                                onChange={(e) => handleChange("leader", e.target.value)}
-                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
-                            >
-                                {members.map((m) => (
-                                    <option key={m.member_id} value={m.member_name}>
-                                        {m.member_name}
-                                    </option>
-                                ))}
-                            </select>
-                        </label>
-
-                        <label className="block">
-                            <span className="mb-2 block text-sm font-bold text-slate-700">
-                                担当者
-                            </span>
-                            <select
-                                value={form.assignee}
-                                onChange={(e) => handleChange("assignee", e.target.value)}
-                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
-                            >
-                                {members.map((m) => (
-                                    <option key={m.member_id} value={m.member_name}>
-                                        {m.member_name}
-                                    </option>
-                                ))}
-                            </select>
-                        </label>
-                    </div>
-
-                    <div className="grid gap-5 md:grid-cols-3">
-                        <label className="block">
-                            <span className="mb-2 block text-sm font-bold text-slate-700">
-                                ステータス
-                            </span>
+                            <span className="mb-2 block text-sm font-bold text-slate-700">ステータス</span>
                             <select
                                 value={form.status}
-                                onChange={(e) =>
-                                    handleChange("status", e.target.value as TaskStatus)
-                                }
+                                onChange={(event) => handleChange("status", event.target.value as TaskStatus)}
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                             >
-                                {statusOptions.map((status) => (
+                                {STATUS_OPTIONS.map((status) => (
                                     <option key={status} value={status}>
                                         {status}
                                     </option>
@@ -232,79 +153,108 @@ export function TaskEditModal({
                         </label>
 
                         <label className="block">
-                            <span className="mb-2 block text-sm font-bold text-slate-700">
-                                進捗率
-                            </span>
+                            <span className="mb-2 block text-sm font-bold text-slate-700">進捗率</span>
                             <input
                                 type="number"
                                 min={0}
                                 max={100}
                                 value={form.progress_pct}
-                                onChange={(e) =>
-                                    handleChange("progress_pct", Number(e.target.value))
-                                }
+                                onChange={(event) => handleChange("progress_pct", Number(event.target.value))}
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                             />
                         </label>
 
                         <label className="block">
-                            <span className="mb-2 block text-sm font-bold text-slate-700">
-                                キャパ(%)
-                            </span>
+                            <span className="mb-2 block text-sm font-bold text-slate-700">キャパ (%)</span>
                             <input
                                 type="number"
                                 min={0}
                                 max={100}
                                 value={form.capacity_pct}
-                                onChange={(e) =>
-                                    handleChange("capacity_pct", Number(e.target.value))
-                                }
+                                onChange={(event) => handleChange("capacity_pct", Number(event.target.value))}
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                             />
+                        </label>
+                    </div>
+
+                    <div className="grid gap-5 md:grid-cols-3">
+                        <label className="block">
+                            <span className="mb-2 block text-sm font-bold text-slate-700">Manager</span>
+                            <select
+                                value={form.manager}
+                                onChange={(event) => handleChange("manager", event.target.value)}
+                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
+                            >
+                                {members.map((member) => (
+                                    <option key={member.member_id} value={member.member_name}>
+                                        {member.member_name}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+
+                        <label className="block">
+                            <span className="mb-2 block text-sm font-bold text-slate-700">Leader</span>
+                            <select
+                                value={form.leader}
+                                onChange={(event) => handleChange("leader", event.target.value)}
+                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
+                            >
+                                {members.map((member) => (
+                                    <option key={member.member_id} value={member.member_name}>
+                                        {member.member_name}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+
+                        <label className="block">
+                            <span className="mb-2 block text-sm font-bold text-slate-700">担当者</span>
+                            <select
+                                value={form.assignee}
+                                onChange={(event) => handleChange("assignee", event.target.value)}
+                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
+                            >
+                                {members.map((member) => (
+                                    <option key={member.member_id} value={member.member_name}>
+                                        {member.member_name}
+                                    </option>
+                                ))}
+                            </select>
                         </label>
                     </div>
 
                     <div className="grid gap-5 md:grid-cols-2">
                         <label className="block">
-                            <span className="mb-2 block text-sm font-bold text-slate-700">
-                                期日
-                            </span>
-                            <input
-                                type="date"
-                                value={form.due_date}
-                                onChange={(e) => handleChange("due_date", e.target.value)}
-                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
+                            <span className="mb-2 block text-sm font-bold text-slate-700">説明</span>
+                            <textarea
+                                value={form.description}
+                                onChange={(event) => handleChange("description", event.target.value)}
+                                className="min-h-[108px] w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                             />
                         </label>
 
-                        <label className="block">
-                            <span className="mb-2 block text-sm font-bold text-slate-700">
-                                メモ（30字以内）
-                            </span>
-                            <input
-                                type="text"
-                                value={form.memo}
-                                onChange={(e) => handleChange("memo", e.target.value.slice(0, 30))}
-                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
-                                maxLength={30}
-                            />
-                            <span className="mt-2 block text-xs text-slate-400">
-                                {form.memo.length}/30
-                            </span>
-                        </label>
+                        <div className="space-y-5">
+                            <label className="block">
+                                <span className="mb-2 block text-sm font-bold text-slate-700">期日</span>
+                                <input
+                                    type="date"
+                                    value={form.due_date}
+                                    onChange={(event) => handleChange("due_date", event.target.value)}
+                                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
+                                />
+                            </label>
+
+                            <label className="block">
+                                <span className="mb-2 block text-sm font-bold text-slate-700">メモ</span>
+                                <textarea
+                                    value={form.memo}
+                                    onChange={(event) => handleChange("memo", event.target.value)}
+                                    className="min-h-[108px] w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
+                                />
+                            </label>
+                        </div>
                     </div>
-
-                    <label className="block">
-                        <span className="mb-2 block text-sm font-bold text-slate-700">
-                            内容
-                        </span>
-                        <textarea
-                            value={form.description}
-                            onChange={(e) => handleChange("description", e.target.value)}
-                            className="min-h-[110px] w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
-                            maxLength={150}
-                        />
-                    </label>
 
                     <div className="flex justify-end gap-3 pt-2">
                         <button
