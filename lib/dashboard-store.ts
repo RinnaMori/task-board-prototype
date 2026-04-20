@@ -4,66 +4,54 @@ import { useEffect, useMemo, useState } from "react";
 import { defaultStore } from "@/data/mock-data";
 import type {
     AssignmentHistoryItem,
+    AssignmentMatrixRow,
     DashboardStore,
-    FlowRow,
+    FlowLogRow,
+    FlowTableRow,
     Member,
+    MemberRole,
     MemberStatusSummary,
     Project,
     Task,
-    TaskColor,
+    TaskPriority,
     TaskStatus,
 } from "@/types/dashboard";
 
-const STORAGE_KEY = "task-dashboard-store-v2";
+const STORAGE_KEY = "task-dashboard-store-v3";
+const STORE_EVENT_NAME = "dashboard-store-updated";
 
+export const PRIORITY_OPTIONS: TaskPriority[] = ["高", "中", "低"];
 export const STATUS_OPTIONS: TaskStatus[] = ["未着手", "進行中", "完了", "保留"];
+export const ROLE_OPTIONS: MemberRole[] = ["マネージャー", "リーダー", "正社員", "業務委託"];
 
-export const PRIORITY_OPTIONS = ["高", "中", "低"] as const;
-
-export const TASK_COLOR_ACCENTS: Record<TaskColor, string> = {
-    blue: "bg-blue-500",
-    green: "bg-green-500",
-    orange: "bg-orange-500",
-    purple: "bg-purple-500",
-    red: "bg-red-500",
-    cyan: "bg-cyan-500",
-    slate: "bg-slate-500",
-};
-
-export const PROJECT_COLOR_MAP: Record<string, { color: TaskColor; accentColor: string }> = {
-    Webサイト更新: { color: "blue", accentColor: "bg-blue-500" },
-    競合調査: { color: "green", accentColor: "bg-green-500" },
-    営業支援: { color: "orange", accentColor: "bg-orange-500" },
-    データ整備: { color: "cyan", accentColor: "bg-cyan-500" },
-    その他: { color: "slate", accentColor: "bg-slate-500" },
-};
-
-function cloneDefaultStore(): DashboardStore {
+export function cloneDefaultStore(): DashboardStore {
     return JSON.parse(JSON.stringify(defaultStore)) as DashboardStore;
 }
 
-export function formatNow() {
-    const now = new Date();
-    const pad = (value: number) => String(value).padStart(2, "0");
-
-    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(
-        now.getHours(),
-    )}:${pad(now.getMinutes())}`;
+export function inferRoleFromName(name: string): MemberRole {
+    if (name.includes("マネージャー")) return "マネージャー";
+    if (name.includes("リーダー")) return "リーダー";
+    if (name.includes("正社員")) return "正社員";
+    return "業務委託";
 }
 
-export function getProjectColor(
-    projectName: string,
-    projects: Project[],
-): { color: TaskColor; accentColor: string } {
-    const fromProjects = projects.find((project) => project.project_name === projectName);
-    if (fromProjects) {
-        return {
-            color: fromProjects.color,
-            accentColor: fromProjects.accentColor,
-        };
-    }
+export function getRoleOrder(role: MemberRole) {
+    return ROLE_OPTIONS.indexOf(role);
+}
 
-    return PROJECT_COLOR_MAP[projectName] ?? PROJECT_COLOR_MAP["その他"];
+export function formatNow() {
+    return new Date().toISOString();
+}
+
+export function formatDateTimeLabel(value?: string | null) {
+    if (!value) return "-";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, "0")}/${String(
+        date.getDate(),
+    ).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(
+        date.getMinutes(),
+    ).padStart(2, "0")}`;
 }
 
 export function getInitials(name: string) {
@@ -72,13 +60,19 @@ export function getInitials(name: string) {
     return trimmed.slice(0, 1);
 }
 
+export function normalizeDate(value: string) {
+    return value ? value.slice(0, 10) : "";
+}
+
+export function isDueToday(task: Task) {
+    if (!task.due_date) return false;
+    return normalizeDate(task.due_date) === normalizeDate(new Date().toISOString());
+}
+
 export function isOverdue(task: Task) {
     if (!task.due_date || task.status === "完了") return false;
-    const today = new Date();
-    const due = new Date(task.due_date);
-    today.setHours(0, 0, 0, 0);
-    due.setHours(0, 0, 0, 0);
-    return due.getTime() < today.getTime();
+    const today = normalizeDate(new Date().toISOString());
+    return normalizeDate(task.due_date) < today;
 }
 
 export function getDueLabel(dueDate: string) {
@@ -89,63 +83,8 @@ export function getDueTextClass(task: Task) {
     if (!task.due_date) return "text-slate-400";
     if (task.status === "完了") return "text-slate-500";
     if (isOverdue(task)) return "text-red-600";
-
-    const today = new Date();
-    const due = new Date(task.due_date);
-    today.setHours(0, 0, 0, 0);
-    due.setHours(0, 0, 0, 0);
-    const diffDays = (due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24);
-
-    if (diffDays <= 3) return "text-amber-600";
+    if (isDueToday(task)) return "text-amber-600";
     return "text-slate-500";
-}
-
-export function getAllTasks(members: Member[]) {
-    return members
-        .flatMap((member) => member.tasks)
-        .sort((a, b) => a.task_id.localeCompare(b.task_id, "ja"));
-}
-
-export function getMemberCapacity(member: Member) {
-    return member.tasks
-        .filter((task) => task.status === "進行中")
-        .reduce((sum, task) => sum + task.capacity_pct, 0);
-}
-
-export function getMemberStatusSummary(member: Member): MemberStatusSummary {
-    const summary = {
-        member_name: member.member_name,
-        未着手: 0,
-        進行中: 0,
-        完了: 0,
-        保留: 0,
-        合計: member.tasks.length,
-    } satisfies MemberStatusSummary;
-
-    member.tasks.forEach((task) => {
-        summary[task.status] += 1;
-    });
-
-    return summary;
-}
-
-export function getFlowRows(tasks: Task[]): FlowRow[] {
-    return tasks.map((task) => {
-        const latestHistory = task.assignment_history[task.assignment_history.length - 1];
-
-        return {
-            task_id: task.task_id,
-            task_name: task.task_name,
-            manager: task.manager,
-            leader: task.leader,
-            assignee: task.assignee,
-            latest_flow: latestHistory
-                ? `${latestHistory.from} → ${latestHistory.to}`
-                : `${task.flow_from} → ${task.flow_to}`,
-            delegated_at: latestHistory?.changed_at ?? "-",
-            status: task.status,
-        };
-    });
 }
 
 export function createInitialAssignmentHistory(task: {
@@ -184,18 +123,119 @@ export function createInitialAssignmentHistory(task: {
     return history;
 }
 
-function normalizeStore(input: DashboardStore): DashboardStore {
+export function getProjectColor(
+    projectName: string,
+    projects: Project[],
+): { color: Project["color"]; accentColor: string } {
+    const matched = projects.find((project) => project.project_name === projectName);
+    return matched
+        ? { color: matched.color, accentColor: matched.accentColor }
+        : { color: "slate", accentColor: "bg-slate-500" };
+}
+
+export function isTaskRecentlyCompleted(task: Task) {
+    if (task.status !== "完了" || !task.completed_at) return false;
+    const completed = new Date(task.completed_at).getTime();
+    if (Number.isNaN(completed)) return false;
+    return Date.now() - completed <= 24 * 60 * 60 * 1000;
+}
+
+export function shouldShowTaskOnDashboard(task: Task) {
+    if (task.status !== "完了") return true;
+    return isTaskRecentlyCompleted(task);
+}
+
+export function sortTasksForDashboard(tasks: Task[]) {
+    const priorityOrder: Record<Task["priority"], number> = {
+        高: 0,
+        中: 1,
+        低: 2,
+    };
+
+    return [...tasks].sort((a, b) => {
+        const aCompleted = a.status === "完了";
+        const bCompleted = b.status === "完了";
+
+        if (aCompleted && !bCompleted) return 1;
+        if (!aCompleted && bCompleted) return -1;
+
+        if (aCompleted && bCompleted) {
+            const aTime = a.completed_at ? new Date(a.completed_at).getTime() : 0;
+            const bTime = b.completed_at ? new Date(b.completed_at).getTime() : 0;
+            return bTime - aTime;
+        }
+
+        const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
+        if (priorityDiff !== 0) return priorityDiff;
+
+        const aDue = a.due_date || "9999-12-31";
+        const bDue = b.due_date || "9999-12-31";
+        if (aDue !== bDue) return aDue.localeCompare(bDue);
+
+        return a.task_id.localeCompare(b.task_id, "ja");
+    });
+}
+
+export function getAllTasks(members: Member[]) {
+    return members.flatMap((member) => member.tasks);
+}
+
+export function getDashboardVisibleTasks(members: Member[]) {
+    return getAllTasks(members).filter(shouldShowTaskOnDashboard);
+}
+
+export function getCompletedTasks(members: Member[]) {
+    return getAllTasks(members).filter((task) => task.status === "完了");
+}
+
+export function getActiveTasks(members: Member[]) {
+    return getAllTasks(members).filter((task) => task.status !== "完了");
+}
+
+export function getMemberDueTodayCount(member: Member) {
+    return member.tasks.filter((task) => task.status !== "完了" && isDueToday(task)).length;
+}
+
+export function getMemberStatusSummary(member: Member): MemberStatusSummary {
+    const summary: MemberStatusSummary = {
+        member_name: member.member_name,
+        未着手: 0,
+        進行中: 0,
+        完了: 0,
+        保留: 0,
+        合計: member.tasks.length,
+    };
+
+    member.tasks.forEach((task) => {
+        summary[task.status] += 1;
+    });
+
+    return summary;
+}
+
+export function decorateMembers(members: Member[]) {
+    return members.map((member) => {
+        const dueTodayCount = getMemberDueTodayCount(member);
+        return {
+            ...member,
+            initials: member.initials || getInitials(member.member_name),
+            due_today_count: dueTodayCount,
+            capacity_pct: dueTodayCount,
+            capacity_label: `${dueTodayCount} 件`,
+        };
+    });
+}
+
+export function normalizeStore(input: DashboardStore): DashboardStore {
     return {
         members: input.members.map((member) => ({
             ...member,
             initials: member.initials || getInitials(member.member_name),
+            due_today_count: member.due_today_count ?? 0,
             tasks: member.tasks.map((task) => ({
                 ...task,
-                priority: task.priority ?? "中",
-                assignment_history: task.assignment_history.map((item) => ({
-                    ...item,
-                    role: item.role ?? "担当変更",
-                })),
+                completed_at: task.completed_at ?? null,
+                assignment_history: task.assignment_history ?? [],
             })),
         })),
         projects: input.projects,
@@ -205,11 +245,11 @@ function normalizeStore(input: DashboardStore): DashboardStore {
 export function loadDashboardStore(): DashboardStore {
     if (typeof window === "undefined") return cloneDefaultStore();
 
-    const saved = window.localStorage.getItem(STORAGE_KEY);
-    if (!saved) return cloneDefaultStore();
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return cloneDefaultStore();
 
     try {
-        return normalizeStore(JSON.parse(saved) as DashboardStore);
+        return normalizeStore(JSON.parse(raw) as DashboardStore);
     } catch {
         return cloneDefaultStore();
     }
@@ -218,52 +258,130 @@ export function loadDashboardStore(): DashboardStore {
 export function saveDashboardStore(store: DashboardStore) {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+    window.dispatchEvent(new Event(STORE_EVENT_NAME));
 }
 
-export function decorateMembers(members: Member[]) {
-    return members.map((member) => {
-        const capacity = getMemberCapacity(member);
+export function useDashboardStore() {
+    const [store, setStore] = useState<DashboardStore>(() => loadDashboardStore());
+
+    useEffect(() => {
+        const sync = () => {
+            setStore(loadDashboardStore());
+        };
+
+        window.addEventListener("storage", sync);
+        window.addEventListener(STORE_EVENT_NAME, sync as EventListener);
+
+        return () => {
+            window.removeEventListener("storage", sync);
+            window.removeEventListener(STORE_EVENT_NAME, sync as EventListener);
+        };
+    }, []);
+
+    const members = useMemo(() => decorateMembers(store.members), [store.members]);
+    const tasks = useMemo(() => getAllTasks(members), [members]);
+    const activeTasks = useMemo(() => getActiveTasks(members), [members]);
+    const completedTasks = useMemo(() => getCompletedTasks(members), [members]);
+    const dashboardTasks = useMemo(() => getDashboardVisibleTasks(members), [members]);
+    const statusSummary = useMemo(() => members.map((member) => getMemberStatusSummary(member)), [members]);
+
+    const updateStore = (nextStore: DashboardStore) => {
+        const normalized = normalizeStore(nextStore);
+        setStore(normalized);
+        saveDashboardStore(normalized);
+    };
+
+    return {
+        members,
+        rawMembers: store.members,
+        projects: store.projects,
+        tasks,
+        activeTasks,
+        completedTasks,
+        dashboardTasks,
+        statusSummary,
+        setMembers: (membersToSave: Member[]) => {
+            updateStore({
+                ...store,
+                members: membersToSave,
+            });
+        },
+        setProjects: (projectsToSave: Project[]) => {
+            updateStore({
+                ...store,
+                projects: projectsToSave,
+            });
+        },
+        resetStore: () => {
+            updateStore(cloneDefaultStore());
+        },
+    };
+}
+
+export function buildAssignmentMatrix(tasks: Task[]): AssignmentMatrixRow[] {
+    const counts = new Map<string, number>();
+
+    tasks
+        .filter((task) => task.status !== "完了")
+        .forEach((task) => {
+            const latest = task.assignment_history[task.assignment_history.length - 1];
+            const from = latest?.from || task.manager || task.flow_from || "未設定";
+            const to = task.assignee || latest?.to || task.flow_to || "未設定";
+            const key = `${from}__${to}`;
+            counts.set(key, (counts.get(key) ?? 0) + 1);
+        });
+
+    return Array.from(counts.entries())
+        .map(([key, count]) => {
+            const [from, to] = key.split("__");
+            return { from, to, count };
+        })
+        .sort((a, b) => {
+            if (a.from !== b.from) return a.from.localeCompare(b.from, "ja");
+            return a.to.localeCompare(b.to, "ja");
+        });
+}
+
+export function buildFlowRows(tasks: Task[]): FlowTableRow[] {
+    return tasks.map((task) => {
+        const currentFrom =
+            task.assignment_history[task.assignment_history.length - 1]?.from ||
+            task.leader ||
+            task.manager ||
+            task.flow_from ||
+            "未設定";
+
         return {
-            ...member,
-            initials: member.initials || getInitials(member.member_name),
-            capacity_pct: capacity,
-            capacity_label: `${capacity} / 100`,
+            task_id: task.task_id,
+            task_name: task.task_name,
+            manager: task.manager || "未設定",
+            leader: task.leader || "未設定",
+            assignee: task.assignee || "未設定",
+            current_from: currentFrom,
+            current_to: task.assignee || task.flow_to || "未設定",
+            status: task.status,
+            due_date: task.due_date,
+            completed_at: task.completed_at ?? null,
         };
     });
 }
 
-export function useDashboardStore() {
-    const [store, setStore] = useState<DashboardStore>(cloneDefaultStore());
-    const [isReady, setIsReady] = useState(false);
-
-    useEffect(() => {
-        setStore(loadDashboardStore());
-        setIsReady(true);
-    }, []);
-
-    useEffect(() => {
-        if (!isReady) return;
-        saveDashboardStore(store);
-    }, [isReady, store]);
-
-    const decoratedMembers = useMemo(() => decorateMembers(store.members), [store.members]);
-    const tasks = useMemo(() => getAllTasks(decoratedMembers), [decoratedMembers]);
-    const flowRows = useMemo(() => getFlowRows(tasks), [tasks]);
-    const statusSummary = useMemo(
-        () => decoratedMembers.map((member) => getMemberStatusSummary(member)),
-        [decoratedMembers],
-    );
-
-    return {
-        isReady,
-        members: decoratedMembers,
-        rawMembers: store.members,
-        projects: store.projects,
-        tasks,
-        flowRows,
-        statusSummary,
-        setMembers: (members: Member[]) => setStore((prev) => ({ ...prev, members })),
-        setProjects: (projects: Project[]) => setStore((prev) => ({ ...prev, projects })),
-        resetStore: () => setStore(cloneDefaultStore()),
-    };
+export function buildFlowLogRows(tasks: Task[]): FlowLogRow[] {
+    return tasks
+        .flatMap((task) =>
+            task.assignment_history.map((history, index) => ({
+                log_id: `${task.task_id}-${index}-${history.changed_at}`,
+                changed_at: history.changed_at,
+                task_id: task.task_id,
+                task_name: task.task_name,
+                from: history.from,
+                to: history.to,
+                role: history.role,
+                manager: task.manager || "未設定",
+                leader: task.leader || "未設定",
+                assignee: task.assignee || "未設定",
+                status: task.status,
+            })),
+        )
+        .sort((a, b) => new Date(b.changed_at).getTime() - new Date(a.changed_at).getTime());
 }

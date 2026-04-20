@@ -3,10 +3,15 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import {
+  buildAssignmentMatrix,
   createInitialAssignmentHistory,
   formatNow,
+  getCompletedTasks,
   getInitials,
   getProjectColor,
+  getRoleOrder,
+  getDashboardVisibleTasks,
+  inferRoleFromName,
   isOverdue,
   useDashboardStore,
 } from "@/lib/dashboard-store";
@@ -15,7 +20,7 @@ import {
   loadScheduleStore,
   saveScheduleStore,
 } from "@/lib/schedule-utils";
-import type { Member, NewTaskInput, Task, TaskColor, TaskStatus, UpdateTaskInput } from "@/types/dashboard";
+import type { Member, MemberRole, NewTaskInput, Task, TaskColor, TaskStatus, UpdateTaskInput } from "@/types/dashboard";
 
 import { AppShell } from "./AppShell";
 import { DashboardHeader } from "./DashboardHeader";
@@ -24,8 +29,6 @@ import { MemberColumn } from "./MemberColumn";
 import { ProjectAddModal } from "./ProjectAddModal";
 import { TaskAddModal } from "./TaskAddModal";
 import { TaskEditModal } from "./TaskEditModal";
-
-type MemberRoleLike = "マネージャー" | "リーダー" | "正社員" | "業務委託";
 
 function getNextTaskId(members: Member[]) {
   const maxNumber = members
@@ -108,22 +111,10 @@ function getFallbackMemberName(
   );
 }
 
-function inferRoleFromName(name: string): MemberRoleLike {
-  if (name.includes("マネージャー")) return "マネージャー";
-  if (name.includes("リーダー")) return "リーダー";
-  if (name.includes("正社員")) return "正社員";
-  return "業務委託";
-}
-
-function getRoleOrder(role: MemberRoleLike) {
-  const order: MemberRoleLike[] = ["マネージャー", "リーダー", "正社員", "業務委託"];
-  return order.indexOf(role);
-}
-
 function insertMemberByRoleOrder(
   members: Member[],
   newMember: Member,
-  newMemberRole: MemberRoleLike,
+  newMemberRole: MemberRole,
 ) {
   const targetRoleOrder = getRoleOrder(newMemberRole);
   let insertIndex = members.length;
@@ -140,78 +131,95 @@ function insertMemberByRoleOrder(
 }
 
 export function DashboardBoard() {
-  const { members, rawMembers, projects, tasks, statusSummary, setMembers, setProjects, resetStore } =
-    useDashboardStore();
+  const {
+    members,
+    rawMembers,
+    projects,
+    tasks,
+    dashboardTasks,
+    statusSummary,
+    setMembers,
+    setProjects,
+    resetStore,
+  } = useDashboardStore();
 
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [isMemberModalOpen, setIsMemberModalOpen] = useState(false);
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [filterStatus, setFilterStatus] = useState<TaskStatus | "all">("all");
-  const [capacityRoleFilter, setCapacityRoleFilter] = useState<MemberRoleLike | "all">("all");
-  const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState<MemberRole | "all">("all");
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
 
   const visibleMembers = useMemo(() => {
-    return members.map((member) => ({
+    const filteredByRole =
+      roleFilter === "all"
+        ? members
+        : members.filter((member) => inferRoleFromName(member.member_name) === roleFilter);
+
+    return filteredByRole.map((member) => ({
       ...member,
       tasks: member.tasks.filter((task) => {
-        const keyword = search.trim();
-        const hitKeyword =
-          !keyword ||
-          [task.task_id, task.task_name, task.project_name, task.assignee, task.manager, task.leader]
-            .join(" ")
-            .includes(keyword);
-        const hitStatus = filterStatus === "all" || task.status === filterStatus;
-        return hitKeyword && hitStatus;
+        if (!getDashboardVisibleTasks([member]).some((visible) => visible.task_id === task.task_id)) {
+          return false;
+        }
+        if (filterStatus === "all") return true;
+        return task.status === filterStatus;
       }),
     }));
-  }, [filterStatus, members, search]);
+  }, [filterStatus, members, roleFilter]);
 
   const overview = useMemo(() => {
-    const overdueCount = tasks.filter((task) => isOverdue(task)).length;
-    const inProgressCapacity = members.reduce((sum, member) => sum + member.capacity_pct, 0);
+    const overdueCount = dashboardTasks.filter((task) => isOverdue(task)).length;
+    const dueTodayCount = dashboardTasks.filter(
+      (task) => task.status !== "完了" && task.due_date && task.due_date.slice(0, 10) === new Date().toISOString().slice(0, 10),
+    ).length;
+
     return {
       totalTasks: tasks.length,
+      visibleDashboardTasks: dashboardTasks.length,
       overdueCount,
-      inProgressCount: tasks.filter((task) => task.status === "進行中").length,
-      inProgressCapacity,
+      dueTodayCount,
+      completedCount: getCompletedTasks(members).length,
     };
-  }, [members, tasks]);
-
-  const sortedCapacityMembers = useMemo(() => {
-    return [...members]
-      .map((member, index) => ({ member, index }))
-      .filter(({ member }) => {
-        if (capacityRoleFilter === "all") return true;
-        return inferRoleFromName(member.member_name) === capacityRoleFilter;
-      })
-      .sort((a, b) => {
-        const roleDiff =
-          getRoleOrder(inferRoleFromName(a.member.member_name)) -
-          getRoleOrder(inferRoleFromName(b.member.member_name));
-        return roleDiff || a.index - b.index;
-      })
-      .map(({ member }) => member);
-  }, [capacityRoleFilter, members]);
+  }, [dashboardTasks, members, tasks.length]);
 
   const sortedStatusSummary = useMemo(() => {
     return [...statusSummary]
-      .map((row, index) => ({ row, index }))
+      .filter((row) => roleFilter === "all" || inferRoleFromName(row.member_name) === roleFilter)
       .sort((a, b) => {
         const roleDiff =
-          getRoleOrder(inferRoleFromName(a.row.member_name)) -
-          getRoleOrder(inferRoleFromName(b.row.member_name));
-        return roleDiff || a.index - b.index;
-      })
-      .map(({ row }) => row);
-  }, [statusSummary]);
+          getRoleOrder(inferRoleFromName(a.member_name)) -
+          getRoleOrder(inferRoleFromName(b.member_name));
+        return roleDiff || a.member_name.localeCompare(b.member_name, "ja");
+      });
+  }, [roleFilter, statusSummary]);
+
+  const assignmentMatrix = useMemo(() => buildAssignmentMatrix(tasks), [tasks]);
 
   const handleDeleteTask = (taskId: string) => {
     setMembers(
       rawMembers.map((member) => ({
         ...member,
         tasks: member.tasks.filter((task) => task.task_id !== taskId),
+      })),
+    );
+  };
+
+  const handleCompleteTask = (taskId: string) => {
+    setMembers(
+      rawMembers.map((member) => ({
+        ...member,
+        tasks: member.tasks.map((task) =>
+          task.task_id === taskId
+            ? {
+              ...task,
+              status: "完了",
+              progress_pct: 100,
+              completed_at: formatNow(),
+            }
+            : task,
+        ),
       })),
     );
   };
@@ -265,6 +273,7 @@ export function DashboardBoard() {
       color: projectColor.color,
       due_date: newTask.due_date,
       memo: newTask.memo,
+      completed_at: null,
       assignment_history: createInitialAssignmentHistory(newTask),
     };
 
@@ -308,6 +317,10 @@ export function DashboardBoard() {
       flow_to: updatedTask.assignee,
       accentColor: projectColor.accentColor,
       color: projectColor.color,
+      completed_at:
+        updatedTask.status === "完了"
+          ? currentTask.completed_at ?? formatNow()
+          : null,
     };
 
     const currentOwnerName = rawMembers.find((member) =>
@@ -347,12 +360,13 @@ export function DashboardBoard() {
       member_name: input.member_name,
       initials: getInitials(input.member_name),
       capacity_pct: 0,
-      capacity_label: "0 / 100",
+      capacity_label: "0 件",
+      due_today_count: 0,
       columnColor: input.columnColor,
       tasks: [],
     };
 
-    setMembers(insertMemberByRoleOrder(rawMembers, newMember, input.member_role as MemberRoleLike));
+    setMembers(insertMemberByRoleOrder(rawMembers, newMember, input.member_role as MemberRole));
 
     const scheduleStore = loadScheduleStore();
     const exists = scheduleStore.members.some((member) => member.member_name === input.member_name);
@@ -388,7 +402,7 @@ export function DashboardBoard() {
   return (
     <AppShell
       title="タスク・キャパシティ管理ダッシュボード"
-      description="メンバー別ボード、キャパ集計、件数集計をまとめて確認できます。"
+      description="メンバー別ボード、件数集計、現在の差配件数をまとめて確認できます。"
       actions={
         <div className="flex flex-wrap gap-2">
           <Link
@@ -398,38 +412,42 @@ export function DashboardBoard() {
             稼働申告ページへ
           </Link>
           <div className="rounded-2xl bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">
-            要件対応: 任意差配 / 役職追加 / 色追加 / キャパ順序とフィルタ
+            完了タスクは24時間後にダッシュボードから自動非表示
           </div>
         </div>
       }
     >
       <DashboardHeader
-        search={search}
-        onChangeSearch={setSearch}
         filterStatus={filterStatus}
         onChangeStatus={setFilterStatus}
+        roleFilter={roleFilter}
+        onChangeRole={setRoleFilter}
         onOpenTaskModal={() => setIsTaskModalOpen(true)}
         onOpenMemberModal={() => setIsMemberModalOpen(true)}
         onOpenProjectModal={() => setIsProjectModalOpen(true)}
         onReset={resetStore}
       />
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <div className="rounded-[24px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
-          <p className="text-sm font-semibold text-slate-500">総タスク数</p>
+          <p className="text-sm font-semibold text-slate-500">全タスク数</p>
           <p className="mt-2 text-4xl font-extrabold text-slate-900">{overview.totalTasks}</p>
         </div>
         <div className="rounded-[24px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
-          <p className="text-sm font-semibold text-slate-500">進行中タスク</p>
-          <p className="mt-2 text-4xl font-extrabold text-slate-900">{overview.inProgressCount}</p>
+          <p className="text-sm font-semibold text-slate-500">ダッシュボード表示中</p>
+          <p className="mt-2 text-4xl font-extrabold text-slate-900">{overview.visibleDashboardTasks}</p>
         </div>
         <div className="rounded-[24px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
-          <p className="text-sm font-semibold text-slate-500">進行中キャパ合計</p>
-          <p className="mt-2 text-4xl font-extrabold text-slate-900">{overview.inProgressCapacity}%</p>
+          <p className="text-sm font-semibold text-slate-500">期日が今日</p>
+          <p className="mt-2 text-4xl font-extrabold text-amber-600">{overview.dueTodayCount}</p>
         </div>
         <div className="rounded-[24px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
-          <p className="text-sm font-semibold text-slate-500">期日超過タスク</p>
+          <p className="text-sm font-semibold text-slate-500">期日超過</p>
           <p className="mt-2 text-4xl font-extrabold text-red-600">{overview.overdueCount}</p>
+        </div>
+        <div className="rounded-[24px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
+          <p className="text-sm font-semibold text-slate-500">完了済み総数</p>
+          <p className="mt-2 text-4xl font-extrabold text-slate-700">{overview.completedCount}</p>
         </div>
       </section>
 
@@ -438,7 +456,7 @@ export function DashboardBoard() {
           <div>
             <h2 className="text-xl font-extrabold text-slate-900">メンバー別タスクボード</h2>
             <p className="mt-1 text-sm text-slate-500">
-              ドラッグ&ドロップで担当変更できます。表示順は役職順で固定されます。
+              優先度が高い順、同優先度では期日が近い順で並びます。
             </p>
           </div>
           <div className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
@@ -453,6 +471,7 @@ export function DashboardBoard() {
               member={member}
               onEditTask={handleEditTask}
               onDeleteTask={handleDeleteTask}
+              onCompleteTask={handleCompleteTask}
               onDeleteMember={handleDeleteMember}
               onDropTask={handleDropTaskToMember}
               draggingTaskId={draggingTaskId}
@@ -465,68 +484,8 @@ export function DashboardBoard() {
 
       <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 px-5 py-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 className="text-xl font-extrabold text-slate-900">キャパシティ集計表</h2>
-              <p className="mt-1 text-sm text-slate-500">
-                左から「マネージャー → リーダー → 正社員 → 業務委託」の順で表示します
-              </p>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              {(["all", "マネージャー", "リーダー", "正社員", "業務委託"] as const).map((role) => {
-                const active = capacityRoleFilter === role;
-                return (
-                  <button
-                    key={role}
-                    type="button"
-                    onClick={() => setCapacityRoleFilter(role)}
-                    className={`rounded-full px-3 py-2 text-sm font-bold transition ${active
-                        ? "bg-slate-900 text-white"
-                        : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                      }`}
-                  >
-                    {role === "all" ? "全役職" : role}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full border-collapse text-sm">
-            <thead className="bg-slate-50 text-left text-slate-700">
-              <tr>
-                {["役職", "担当者", "合計"].map((label) => (
-                  <th key={label} className="border-b border-slate-200 px-4 py-3 font-bold">
-                    {label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {sortedCapacityMembers.map((member) => (
-                <tr key={member.member_id} className="odd:bg-white even:bg-slate-50/60">
-                  <td className="border-b border-slate-100 px-4 py-3 text-slate-600">
-                    {inferRoleFromName(member.member_name)}
-                  </td>
-                  <td className="border-b border-slate-100 px-4 py-3 font-bold text-slate-900">
-                    {member.member_name}
-                  </td>
-                  <td className="border-b border-slate-100 px-4 py-3 font-bold text-slate-900">
-                    {member.capacity_pct}%
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-200 px-5 py-4">
-          <h2 className="text-xl font-extrabold text-slate-900">件数集計表</h2>
-          <p className="mt-1 text-sm text-slate-500">メンバーごとの「未着手 / 進行中 / 完了 / 保留」を自動集計</p>
+          <h2 className="text-xl font-extrabold text-slate-900">メンバー別件数集計表</h2>
+          <p className="mt-1 text-sm text-slate-500">役職フィルタを反映した件数一覧です。</p>
         </div>
         <div className="overflow-x-auto">
           <table className="min-w-full border-collapse text-sm">
@@ -557,6 +516,48 @@ export function DashboardBoard() {
                   </td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-5 py-4">
+          <h2 className="text-xl font-extrabold text-slate-900">現在の差配件数マトリックス</h2>
+          <p className="mt-1 text-sm text-slate-500">誰から誰に、現在何件のタスクが振られているかを集計しています。</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full border-collapse text-sm">
+            <thead className="bg-slate-50 text-left text-slate-700">
+              <tr>
+                {["依頼者", "担当者", "件数"].map((label) => (
+                  <th key={label} className="border-b border-slate-200 px-4 py-3 font-bold">
+                    {label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {assignmentMatrix.map((row) => (
+                <tr key={`${row.from}-${row.to}`} className="odd:bg-white even:bg-slate-50/60">
+                  <td className="border-b border-slate-100 px-4 py-3 font-medium text-slate-800">
+                    {row.from}
+                  </td>
+                  <td className="border-b border-slate-100 px-4 py-3 font-medium text-slate-800">
+                    {row.to}
+                  </td>
+                  <td className="border-b border-slate-100 px-4 py-3 font-bold text-slate-900">
+                    {row.count}
+                  </td>
+                </tr>
+              ))}
+              {assignmentMatrix.length === 0 ? (
+                <tr>
+                  <td colSpan={3} className="px-4 py-6 text-center text-sm text-slate-400">
+                    集計対象タスクがありません
+                  </td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
         </div>

@@ -5,7 +5,9 @@ import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "./AppShell";
 import { MemberScheduleDetailModal } from "./MemberScheduleDetailModal";
 import { ScheduleEntryModal } from "./ScheduleEntryModal";
+import { loadDashboardStore } from "@/lib/dashboard-store";
 import {
+    createEmptyMemberSchedule,
     buildTimelineDates,
     getDateStatus,
     getTodayDateString,
@@ -24,15 +26,24 @@ function getCellClasses(
 ) {
     if (!current) return "bg-transparent";
 
-    const base =
-        current === "available"
-            ? "bg-sky-500 text-white"
-            : "bg-rose-500 text-white";
-
+    const base = current === "available" ? "bg-sky-500 text-white" : "bg-rose-500 text-white";
     const left = prev !== current ? "rounded-l-full" : "";
     const right = next !== current ? "rounded-r-full" : "";
 
     return `${base} ${left} ${right}`;
+}
+
+function mergeMembersWithDashboard(scheduleStore: ScheduleStore): ScheduleStore {
+    const dashboardStore = loadDashboardStore();
+    const dashboardMemberNames = dashboardStore.members.map((member) => member.member_name);
+
+    const existingMap = new Map(scheduleStore.members.map((member) => [member.member_name, member]));
+
+    return {
+        members: dashboardMemberNames.map(
+            (memberName) => existingMap.get(memberName) ?? createEmptyMemberSchedule(memberName),
+        ),
+    };
 }
 
 export function ScheduleBoard() {
@@ -42,7 +53,9 @@ export function ScheduleBoard() {
 
     useEffect(() => {
         const sync = () => {
-            setStore(loadScheduleStore());
+            const merged = mergeMembersWithDashboard(loadScheduleStore());
+            setStore(merged);
+            saveScheduleStore(merged);
         };
 
         sync();
@@ -55,7 +68,7 @@ export function ScheduleBoard() {
         };
     }, []);
 
-    const timelineDates = useMemo(() => buildTimelineDates(14, -3), []);
+    const timelineDates = useMemo(() => buildTimelineDates(14, 0), []);
     const today = getTodayDateString();
 
     const handleSubmitEntry = (input: {
@@ -86,7 +99,7 @@ export function ScheduleBoard() {
         <>
             <AppShell
                 title="スケジュール申告"
-                description="チーム全員の稼働可能 / 稼働不可を、1つのタイムラインで比較できます。"
+                description="横軸が当日から2週間分のタイムラインです。"
                 actions={
                     <div className="flex flex-wrap gap-2">
                         <button
@@ -105,35 +118,11 @@ export function ScheduleBoard() {
                     </div>
                 }
             >
-                <section className="grid gap-4 md:grid-cols-3">
-                    <div className="rounded-[24px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
-                        <p className="text-sm font-semibold text-slate-500">表示メンバー数</p>
-                        <p className="mt-2 text-4xl font-extrabold text-slate-900">{store.members.length}</p>
-                    </div>
-                    <div className="rounded-[24px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
-                        <p className="text-sm font-semibold text-slate-500">表示期間</p>
-                        <p className="mt-2 text-lg font-extrabold text-slate-900">
-                            {timelineDates[0]} 〜 {timelineDates[timelineDates.length - 1]}
-                        </p>
-                    </div>
-                    <div className="rounded-[24px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
-                        <p className="text-sm font-semibold text-slate-500">凡例</p>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                            <span className="rounded-full bg-sky-100 px-3 py-1 text-sm font-bold text-sky-700">
-                                ⭕️ 稼働可能
-                            </span>
-                            <span className="rounded-full bg-rose-100 px-3 py-1 text-sm font-bold text-rose-700">
-                                ❌ 忙しい / 稼働不可
-                            </span>
-                        </div>
-                    </div>
-                </section>
-
                 <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
                     <div className="mb-4">
                         <h2 className="text-xl font-extrabold text-slate-900">全体タイムライン</h2>
                         <p className="mt-1 text-sm text-slate-500">
-                            横軸が日付、縦軸がメンバーです。メンバー名または色付きバーを押すと詳細が開きます。
+                            当日から2週間分を表示しています。メンバー名またはバーを押すと詳細が開きます。
                         </p>
                     </div>
 

@@ -1,11 +1,20 @@
+"use client";
+
 import type { Task } from "@/types/dashboard";
-import { getDueLabel, getDueTextClass, isOverdue } from "@/lib/dashboard-store";
+import {
+    formatDateTimeLabel,
+    getDueLabel,
+    getDueTextClass,
+    isOverdue,
+    isTaskRecentlyCompleted,
+} from "@/lib/dashboard-store";
 import { PriorityBadge, StatusBadge } from "./StatusBadge";
 
 type TaskCardProps = {
     task: Task;
     onEdit: (task: Task) => void;
     onDelete: (taskId: string) => void;
+    onComplete: (taskId: string) => void;
     isDragging: boolean;
     onDragStart: () => void;
     onDragEnd: () => void;
@@ -15,25 +24,34 @@ export function TaskCard({
     task,
     onEdit,
     onDelete,
+    onComplete,
     isDragging,
     onDragStart,
     onDragEnd,
 }: TaskCardProps) {
     const latestHistory = task.assignment_history[task.assignment_history.length - 1];
     const overdue = isOverdue(task);
+    const recentlyCompleted = isTaskRecentlyCompleted(task);
+    const isCompleted = task.status === "完了";
 
     return (
         <article
-            draggable
-            onDragStart={onDragStart}
-            onDragEnd={onDragEnd}
-            className={`cursor-grab rounded-2xl border border-slate-200 bg-white px-3 py-3 shadow-sm transition active:cursor-grabbing ${isDragging ? "opacity-40" : "opacity-100"
+            draggable={!isCompleted}
+            onDragStart={isCompleted ? undefined : onDragStart}
+            onDragEnd={isCompleted ? undefined : onDragEnd}
+            className={`rounded-2xl border px-3 py-3 shadow-sm transition ${isDragging ? "opacity-40" : "opacity-100"
+                } ${isCompleted
+                    ? "border-slate-200 bg-slate-100 text-slate-500"
+                    : "border-slate-200 bg-white cursor-grab active:cursor-grabbing"
                 }`}
         >
             <div className="mb-3 flex items-start justify-between gap-2">
                 <div className="min-w-0">
                     <p className="text-[11px] font-semibold text-slate-500">{task.task_id}</p>
-                    <h3 className="mt-1 line-clamp-2 text-sm font-bold text-slate-900">
+                    <h3
+                        className={`mt-1 line-clamp-2 text-sm font-bold ${isCompleted ? "text-slate-500 line-through" : "text-slate-900"
+                            }`}
+                    >
                         {task.task_name}
                     </h3>
                 </div>
@@ -43,31 +61,27 @@ export function TaskCard({
             <div className="mb-3 flex flex-wrap gap-1.5">
                 <StatusBadge status={task.status} />
                 <PriorityBadge priority={task.priority} />
+                {recentlyCompleted ? (
+                    <span className="inline-flex items-center rounded-full border border-slate-300 bg-slate-200 px-2.5 py-1 text-[11px] font-bold text-slate-700">
+                        完了済み
+                    </span>
+                ) : null}
             </div>
 
             <dl className="space-y-1.5 text-[12px] text-slate-600">
                 <div className="flex justify-between gap-2">
                     <dt className="font-semibold text-slate-500">担当</dt>
-                    <dd className="truncate text-right font-semibold text-slate-800">
-                        {task.assignee}
-                    </dd>
+                    <dd className="truncate text-right font-semibold text-slate-800">{task.assignee || "未選択"}</dd>
                 </div>
 
                 <div className="flex justify-between gap-2">
-                    <dt className="font-semibold text-slate-500">キャパ</dt>
-                    <dd className="font-semibold text-slate-800">{task.capacity_pct}%</dd>
+                    <dt className="font-semibold text-slate-500">期日</dt>
+                    <dd className={`font-semibold ${getDueTextClass(task)}`}>{getDueLabel(task.due_date)}</dd>
                 </div>
 
                 <div className="flex justify-between gap-2">
                     <dt className="font-semibold text-slate-500">進捗</dt>
                     <dd className="font-semibold text-slate-800">{task.progress_pct}%</dd>
-                </div>
-
-                <div className="flex justify-between gap-2">
-                    <dt className="font-semibold text-slate-500">期日</dt>
-                    <dd className={`font-semibold ${getDueTextClass(task)}`}>
-                        {getDueLabel(task.due_date)}
-                    </dd>
                 </div>
             </dl>
 
@@ -77,20 +91,36 @@ export function TaskCard({
                 </p>
             ) : null}
 
+            {isCompleted && task.completed_at ? (
+                <p className="mt-3 rounded-xl bg-slate-200 px-2.5 py-2 text-[11px] font-bold text-slate-700">
+                    完了日時: {formatDateTimeLabel(task.completed_at)}
+                </p>
+            ) : null}
+
             <div className="mt-3 rounded-xl bg-slate-50 px-2.5 py-2 text-[11px] text-slate-600">
                 <p className="font-semibold text-slate-700">最新差配</p>
                 <p className="mt-1 line-clamp-2">
                     {latestHistory
-                        ? `${latestHistory.from} → ${latestHistory.to} / ${latestHistory.changed_at}`
-                        : `${task.flow_from} → ${task.flow_to}`}
+                        ? `${latestHistory.from} → ${latestHistory.to}`
+                        : `${task.flow_from || "未設定"} → ${task.flow_to || "未設定"}`}
                 </p>
             </div>
 
-            <div className="mt-3 flex gap-2">
+            <div className="mt-3 flex gap-1.5">
+                {!isCompleted ? (
+                    <button
+                        type="button"
+                        onClick={() => onComplete(task.task_id)}
+                        className="rounded-xl border border-emerald-200 px-2.5 py-1.5 text-[11px] font-bold text-emerald-700 transition hover:bg-emerald-50"
+                    >
+                        完了
+                    </button>
+                ) : null}
+
                 <button
                     type="button"
                     onClick={() => onEdit(task)}
-                    className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50"
+                    className="rounded-xl border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-700 transition hover:bg-slate-50"
                 >
                     編集
                 </button>
@@ -98,7 +128,7 @@ export function TaskCard({
                 <button
                     type="button"
                     onClick={() => onDelete(task.task_id)}
-                    className="flex-1 rounded-xl border border-red-200 px-3 py-2 text-xs font-bold text-red-600 transition hover:bg-red-50"
+                    className="rounded-xl border border-rose-200 px-2.5 py-1.5 text-[11px] font-bold text-rose-600 transition hover:bg-rose-50"
                 >
                     削除
                 </button>

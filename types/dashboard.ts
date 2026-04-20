@@ -9,7 +9,15 @@ export type TaskColor =
     | "purple"
     | "red"
     | "cyan"
-    | "slate";
+    | "slate"
+    | "pink"
+    | "indigo"
+    | "teal"
+    | "lime"
+    | "amber"
+    | "rose";
+
+export type MemberRole = "マネージャー" | "リーダー" | "正社員" | "業務委託";
 
 export type AssignmentRole =
     | "Manager→Leader"
@@ -29,28 +37,21 @@ export type Task = {
     task_name: string;
     project_name: string;
     priority: TaskPriority;
-
     status: TaskStatus;
     progress_pct: number;
-
     manager: string;
     leader: string;
     assignee: string;
-
     capacity_pct: number;
     assigned_to: string;
-
     description: string;
-
     flow_from: string;
     flow_to: string;
-
     accentColor: string;
     color: TaskColor;
-
     due_date: string;
     memo: string;
-
+    completed_at?: string | null;
     assignment_history: AssignmentHistoryItem[];
 };
 
@@ -60,6 +61,7 @@ export type Member = {
     initials: string;
     capacity_pct: number;
     capacity_label: string;
+    due_today_count: number;
     columnColor: string;
     tasks: Task[];
 };
@@ -76,12 +78,10 @@ export type NewTaskInput = {
     project_name: string;
     priority: TaskPriority;
     description: string;
-
     manager: string;
     leader: string;
     assignee: string;
     capacity_pct: number;
-
     due_date: string;
     memo: string;
 };
@@ -94,10 +94,8 @@ export type UpdateTaskInput = {
     description: string;
     due_date: string;
     memo: string;
-
     status: TaskStatus;
     progress_pct: number;
-
     manager: string;
     leader: string;
     assignee: string;
@@ -118,13 +116,35 @@ export type MemberStatusSummary = {
     合計: number;
 };
 
-export type FlowRow = {
+export type AssignmentMatrixRow = {
+    from: string;
+    to: string;
+    count: number;
+};
+
+export type FlowTableRow = {
     task_id: string;
     task_name: string;
     manager: string;
     leader: string;
     assignee: string;
-    latest_flow: string;
-    delegated_at: string;
+    current_from: string;
+    current_to: string;
+    status: TaskStatus;
+    due_date: string;
+    completed_at?: string | null;
+};
+
+export type FlowLogRow = {
+    log_id: string;
+    changed_at: string;
+    task_id: string;
+    task_name: string;
+    from: string;
+    to: string;
+    role: AssignmentRole;
+    manager: string;
+    leader: string;
+    assignee: string;
     status: TaskStatus;
 };

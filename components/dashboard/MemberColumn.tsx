@@ -3,33 +3,21 @@
 import { useEffect, useState } from "react";
 import type { Member, Task } from "@/types/dashboard";
 import { getTodayStatus, loadScheduleStore } from "@/lib/schedule-utils";
+import { inferRoleFromName, sortTasksForDashboard } from "@/lib/dashboard-store";
 import type { ScheduleType } from "@/types/schedule";
 import { MemberScheduleDetailModal } from "./MemberScheduleDetailModal";
-import { ProgressBar } from "./ProgressBar";
 import { TaskCard } from "./TaskCard";
 
 type MemberColumnProps = {
     member: Member;
     onEditTask: (task: Task) => void;
     onDeleteTask: (taskId: string) => void;
+    onCompleteTask: (taskId: string) => void;
     onDeleteMember: (memberId: string) => void;
     onDropTask: (targetMemberName: string) => void;
     draggingTaskId: string | null;
     onDragStartTask: (taskId: string) => void;
     onDragEndTask: () => void;
-};
-
-const progressColorMap: Record<string, string> = {
-    "border-sky-400": "bg-sky-500",
-    "border-emerald-400": "bg-emerald-500",
-    "border-amber-400": "bg-amber-500",
-    "border-purple-400": "bg-purple-500",
-    "border-rose-400": "bg-rose-500",
-    "border-pink-400": "bg-pink-500",
-    "border-cyan-400": "bg-cyan-500",
-    "border-indigo-400": "bg-indigo-500",
-    "border-lime-400": "bg-lime-500",
-    "border-slate-400": "bg-slate-500",
 };
 
 const avatarColorMap: Record<string, string> = {
@@ -44,13 +32,6 @@ const avatarColorMap: Record<string, string> = {
     "border-lime-400": "bg-lime-100 text-lime-700",
     "border-slate-400": "bg-slate-100 text-slate-700",
 };
-
-function inferRoleFromName(name: string) {
-    if (name.includes("マネージャー")) return "マネージャー";
-    if (name.includes("リーダー")) return "リーダー";
-    if (name.includes("正社員")) return "正社員";
-    return "業務委託";
-}
 
 const roleBadgeMap: Record<string, string> = {
     マネージャー: "bg-sky-100 text-sky-700",
@@ -97,13 +78,13 @@ export function MemberColumn({
     member,
     onEditTask,
     onDeleteTask,
+    onCompleteTask,
     onDeleteMember,
     onDropTask,
     draggingTaskId,
     onDragStartTask,
     onDragEndTask,
 }: MemberColumnProps) {
-    const progressColor = progressColorMap[member.columnColor] ?? "bg-sky-500";
     const avatarColor = avatarColorMap[member.columnColor] ?? "bg-slate-100 text-slate-700";
     const inferredRole = inferRoleFromName(member.member_name);
     const roleBadge = roleBadgeMap[inferredRole] ?? "bg-slate-100 text-slate-700";
@@ -126,6 +107,8 @@ export function MemberColumn({
             window.removeEventListener("schedule-store-updated", syncStatus as EventListener);
         };
     }, [member.member_name]);
+
+    const sortedTasks = sortTasksForDashboard(member.tasks);
 
     return (
         <>
@@ -163,41 +146,40 @@ export function MemberColumn({
                                     </span>
                                     <TodayStatusBadge status={todayStatus} onClick={() => setIsDetailOpen(true)} />
                                 </div>
-                                <p className="text-xs font-medium text-slate-500">進行中キャパ合計</p>
+                                <p className="text-xs font-medium text-slate-500">期日が今日のタスク数</p>
                             </div>
                         </button>
 
                         <div className="flex shrink-0 items-start gap-2">
                             <div className="text-right">
-                                <p className="text-[11px] font-semibold text-slate-500">負荷</p>
-                                <p className="text-2xl font-extrabold leading-none text-slate-900">{member.capacity_pct}%</p>
+                                <p className="text-[11px] font-semibold text-slate-500">当日件数</p>
+                                <p className="text-2xl font-extrabold leading-none text-slate-900">{member.due_today_count}</p>
                             </div>
                             <button
                                 type="button"
                                 onClick={() => onDeleteMember(member.member_id)}
-                                className="rounded-xl border border-rose-200 px-2.5 py-1.5 text-[11px] font-bold text-rose-600 transition hover:bg-rose-50"
+                                className="rounded-lg border border-rose-200 px-2 py-1 text-[10px] font-bold text-rose-600 transition hover:bg-rose-50"
                             >
                                 削除
                             </button>
                         </div>
                     </div>
 
-                    <ProgressBar value={member.capacity_pct} colorClass={progressColor} />
-
                     <div className="mt-2 flex justify-between text-[11px] font-semibold text-slate-500">
                         <span>{member.capacity_label}</span>
-                        <span>タスク数 {member.tasks.length}</span>
+                        <span>表示中 {sortedTasks.length} 件</span>
                     </div>
                 </div>
 
                 <div className="flex-1 space-y-3 overflow-y-auto pr-1">
-                    {member.tasks.length > 0 ? (
-                        member.tasks.map((task) => (
+                    {sortedTasks.length > 0 ? (
+                        sortedTasks.map((task) => (
                             <TaskCard
                                 key={task.task_id}
                                 task={task}
                                 onEdit={onEditTask}
                                 onDelete={onDeleteTask}
+                                onComplete={onCompleteTask}
                                 isDragging={draggingTaskId === task.task_id}
                                 onDragStart={() => onDragStartTask(task.task_id)}
                                 onDragEnd={onDragEndTask}
@@ -205,7 +187,7 @@ export function MemberColumn({
                         ))
                     ) : (
                         <div className="rounded-2xl border border-dashed border-slate-300 bg-white/80 p-5 text-center text-sm font-medium text-slate-400">
-                            タスクなし / ここにドロップ
+                            表示対象タスクなし / ここにドロップ
                         </div>
                     )}
                 </div>
