@@ -40,34 +40,20 @@ const roleBadgeMap: Record<string, string> = {
     業務委託: "bg-purple-100 text-purple-700",
 };
 
-function TodayStatusBadge({
-    status,
-    onClick,
-}: {
-    status: ScheduleType | null;
-    onClick: () => void;
-}) {
+function TodayStatusBadge({ status }: { status: ScheduleType | null }) {
     if (status === "available") {
         return (
-            <button
-                type="button"
-                onClick={onClick}
-                className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700"
-            >
+            <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
                 今日 ⭕
-            </button>
+            </span>
         );
     }
 
     if (status === "unavailable") {
         return (
-            <button
-                type="button"
-                onClick={onClick}
-                className="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-700"
-            >
+            <span className="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-700">
                 今日 ❌
-            </button>
+            </span>
         );
     }
 
@@ -128,27 +114,30 @@ export function MemberColumn({
             >
                 <div className="mb-4">
                     <div className="mb-3 flex items-start justify-between gap-2">
-                        <button
-                            type="button"
-                            onClick={() => setIsDetailOpen(true)}
-                            className="flex min-w-0 items-center gap-3 text-left"
-                        >
-                            <div
+                        <div className="flex min-w-0 items-center gap-3">
+                            <button
+                                type="button"
+                                onClick={() => setIsDetailOpen(true)}
                                 className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold ${avatarColor}`}
                             >
                                 {member.initials}
-                            </div>
-                            <div className="min-w-0">
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => setIsDetailOpen(true)}
+                                className="min-w-0 text-left"
+                            >
                                 <div className="flex flex-wrap items-center gap-2">
                                     <h2 className="truncate text-base font-bold text-slate-900">{member.member_name}</h2>
                                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${roleBadge}`}>
                                         {inferredRole}
                                     </span>
-                                    <TodayStatusBadge status={todayStatus} onClick={() => setIsDetailOpen(true)} />
+                                    <TodayStatusBadge status={todayStatus} />
                                 </div>
                                 <p className="text-xs font-medium text-slate-500">期日が今日のタスク数</p>
-                            </div>
-                        </button>
+                            </button>
+                        </div>
 
                         <div className="flex shrink-0 items-start gap-2">
                             <div className="text-right">

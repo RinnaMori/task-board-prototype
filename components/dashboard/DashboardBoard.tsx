@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   buildAssignmentMatrix,
   createInitialAssignmentHistory,
@@ -20,7 +20,15 @@ import {
   loadScheduleStore,
   saveScheduleStore,
 } from "@/lib/schedule-utils";
-import type { Member, MemberRole, NewTaskInput, Task, TaskColor, TaskStatus, UpdateTaskInput } from "@/types/dashboard";
+import type {
+  Member,
+  MemberRole,
+  NewTaskInput,
+  Task,
+  TaskColor,
+  TaskStatus,
+  UpdateTaskInput,
+} from "@/types/dashboard";
 
 import { AppShell } from "./AppShell";
 import { DashboardHeader } from "./DashboardHeader";
@@ -143,6 +151,7 @@ export function DashboardBoard() {
     resetStore,
   } = useDashboardStore();
 
+  const [mounted, setMounted] = useState(false);
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [isMemberModalOpen, setIsMemberModalOpen] = useState(false);
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
@@ -150,6 +159,10 @@ export function DashboardBoard() {
   const [filterStatus, setFilterStatus] = useState<TaskStatus | "all">("all");
   const [roleFilter, setRoleFilter] = useState<MemberRole | "all">("all");
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const visibleMembers = useMemo(() => {
     const filteredByRole =
@@ -172,7 +185,10 @@ export function DashboardBoard() {
   const overview = useMemo(() => {
     const overdueCount = dashboardTasks.filter((task) => isOverdue(task)).length;
     const dueTodayCount = dashboardTasks.filter(
-      (task) => task.status !== "完了" && task.due_date && task.due_date.slice(0, 10) === new Date().toISOString().slice(0, 10),
+      (task) =>
+        task.status !== "完了" &&
+        task.due_date &&
+        task.due_date.slice(0, 10) === new Date().toISOString().slice(0, 10),
     ).length;
 
     return {
@@ -180,9 +196,8 @@ export function DashboardBoard() {
       visibleDashboardTasks: dashboardTasks.length,
       overdueCount,
       dueTodayCount,
-      completedCount: getCompletedTasks(members).length,
     };
-  }, [dashboardTasks, members, tasks.length]);
+  }, [dashboardTasks, tasks.length]);
 
   const sortedStatusSummary = useMemo(() => {
     return [...statusSummary]
@@ -194,6 +209,17 @@ export function DashboardBoard() {
         return roleDiff || a.member_name.localeCompare(b.member_name, "ja");
       });
   }, [roleFilter, statusSummary]);
+
+  const sortedCapacityMembers = useMemo(() => {
+    return [...members]
+      .filter((member) => roleFilter === "all" || inferRoleFromName(member.member_name) === roleFilter)
+      .sort((a, b) => {
+        const roleDiff =
+          getRoleOrder(inferRoleFromName(a.member_name)) -
+          getRoleOrder(inferRoleFromName(b.member_name));
+        return roleDiff || a.member_name.localeCompare(b.member_name, "ja");
+      });
+  }, [members, roleFilter]);
 
   const assignmentMatrix = useMemo(() => buildAssignmentMatrix(tasks), [tasks]);
 
@@ -317,10 +343,7 @@ export function DashboardBoard() {
       flow_to: updatedTask.assignee,
       accentColor: projectColor.accentColor,
       color: projectColor.color,
-      completed_at:
-        updatedTask.status === "完了"
-          ? currentTask.completed_at ?? formatNow()
-          : null,
+      completed_at: updatedTask.status === "完了" ? currentTask.completed_at ?? formatNow() : null,
     };
 
     const currentOwnerName = rawMembers.find((member) =>
@@ -399,10 +422,20 @@ export function DashboardBoard() {
     setDraggingTaskId(null);
   };
 
+  if (!mounted) {
+    return (
+      <AppShell title="タスク・キャパシティ管理ダッシュボード" description="読み込み中です。">
+        <section className="rounded-[28px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
+          <p className="text-sm text-slate-500">読み込み中...</p>
+        </section>
+      </AppShell>
+    );
+  }
+
   return (
     <AppShell
       title="タスク・キャパシティ管理ダッシュボード"
-      description="メンバー別ボード、件数集計、現在の差配件数をまとめて確認できます。"
+      description="メンバー別ボード、件数集計、キャパシティ集計、現在の差配件数をまとめて確認できます。"
       actions={
         <div className="flex flex-wrap gap-2">
           <Link
@@ -428,7 +461,7 @@ export function DashboardBoard() {
         onReset={resetStore}
       />
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-[24px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
           <p className="text-sm font-semibold text-slate-500">全タスク数</p>
           <p className="mt-2 text-4xl font-extrabold text-slate-900">{overview.totalTasks}</p>
@@ -445,10 +478,6 @@ export function DashboardBoard() {
           <p className="text-sm font-semibold text-slate-500">期日超過</p>
           <p className="mt-2 text-4xl font-extrabold text-red-600">{overview.overdueCount}</p>
         </div>
-        <div className="rounded-[24px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
-          <p className="text-sm font-semibold text-slate-500">完了済み総数</p>
-          <p className="mt-2 text-4xl font-extrabold text-slate-700">{overview.completedCount}</p>
-        </div>
       </section>
 
       <section className="rounded-[28px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
@@ -456,7 +485,7 @@ export function DashboardBoard() {
           <div>
             <h2 className="text-xl font-extrabold text-slate-900">メンバー別タスクボード</h2>
             <p className="mt-1 text-sm text-slate-500">
-              優先度が高い順、同優先度では期日が近い順で並びます。
+              優先度が高い順、同優先度では期日が近い順、完了済みは最下部に並びます。
             </p>
           </div>
           <div className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
@@ -516,6 +545,48 @@ export function DashboardBoard() {
                   </td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-5 py-4">
+          <h2 className="text-xl font-extrabold text-slate-900">キャパシティ集計表</h2>
+          <p className="mt-1 text-sm text-slate-500">メンバーごとの合計キャパシティを表示します。</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full max-w-xl border-collapse text-sm">
+            <thead className="bg-slate-50 text-left text-slate-700">
+              <tr>
+                {["担当者", "合計"].map((label) => (
+                  <th key={label} className="border-b border-slate-200 px-4 py-3 font-bold">
+                    {label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sortedCapacityMembers.map((member) => (
+                <tr key={member.member_id} className="odd:bg-white even:bg-slate-50/60">
+                  <td className="border-b border-slate-100 px-4 py-3 font-bold text-slate-900">
+                    {member.member_name}
+                  </td>
+                  <td className="border-b border-slate-100 px-4 py-3 font-bold text-slate-900">
+                    {member.tasks
+                      .filter((task) => task.status !== "完了")
+                      .reduce((sum, task) => sum + (task.capacity_pct || 0), 0)}
+                    %
+                  </td>
+                </tr>
+              ))}
+              {sortedCapacityMembers.length === 0 ? (
+                <tr>
+                  <td colSpan={2} className="px-4 py-6 text-center text-sm text-slate-400">
+                    表示対象メンバーがいません
+                  </td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
         </div>
