@@ -12,7 +12,11 @@ type TaskAddModalProps = {
     onSubmit: (input: NewTaskInput) => void;
 };
 
-const initialForm: NewTaskInput = {
+type TaskAddForm = Omit<NewTaskInput, "capacity_pct"> & {
+    capacity_pct: string;
+};
+
+const initialForm: TaskAddForm = {
     task_name: "",
     project_name: "",
     priority: "中",
@@ -20,29 +24,29 @@ const initialForm: NewTaskInput = {
     manager: "",
     leader: "",
     assignee: "",
-    capacity_pct: 20,
+    capacity_pct: "",
     due_date: "",
     memo: "",
 };
 
 export function TaskAddModal({ isOpen, onClose, members, projects, onSubmit }: TaskAddModalProps) {
-    const [form, setForm] = useState<NewTaskInput>(initialForm);
+    const [form, setForm] = useState<TaskAddForm>(initialForm);
 
     useEffect(() => {
-        if (!isOpen || members.length === 0) return;
+        if (!isOpen) return;
+
+        const defaultManager = members.find((member) => member.member_role === "マネージャー")?.member_name ?? "";
 
         setForm({
             ...initialForm,
             project_name: projects[0]?.project_name ?? "",
-            manager: members[0]?.member_name ?? "",
-            leader: members[1]?.member_name ?? members[0]?.member_name ?? "",
-            assignee: members[2]?.member_name ?? members[0]?.member_name ?? "",
+            manager: defaultManager,
         });
     }, [isOpen, members, projects]);
 
     if (!isOpen) return null;
 
-    const handleChange = <K extends keyof NewTaskInput>(key: K, value: NewTaskInput[K]) => {
+    const handleChange = <K extends keyof TaskAddForm>(key: K, value: TaskAddForm[K]) => {
         setForm((prev) => ({ ...prev, [key]: value }));
     };
 
@@ -59,7 +63,7 @@ export function TaskAddModal({ isOpen, onClose, members, projects, onSubmit }: T
             task_name: form.task_name.trim() || "名称未設定タスク",
             description: form.description.trim(),
             memo: form.memo.trim(),
-            capacity_pct: Number(form.capacity_pct) || 0,
+            capacity_pct: form.capacity_pct === "" ? 0 : Number(form.capacity_pct) || 0,
         });
 
         handleClose();
@@ -71,7 +75,9 @@ export function TaskAddModal({ isOpen, onClose, members, projects, onSubmit }: T
                 <div className="mb-6 flex items-start justify-between gap-4">
                     <div>
                         <h2 className="text-2xl font-extrabold text-slate-900">タスク追加</h2>
-                        <p className="mt-1 text-sm font-medium text-slate-500">Manager / Leader / 担当者 / 優先度 / キャパを登録できます</p>
+                        <p className="mt-1 text-sm font-medium text-slate-500">
+                            Leader / 担当者 / キャパは未選択でも追加できます
+                        </p>
                     </div>
                     <button
                         type="button"
@@ -149,6 +155,7 @@ export function TaskAddModal({ isOpen, onClose, members, projects, onSubmit }: T
                                 onChange={(event) => handleChange("manager", event.target.value)}
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                             >
+                                <option value="">未選択</option>
                                 {members.map((member) => (
                                     <option key={member.member_id} value={member.member_name}>
                                         {member.member_name}
@@ -164,6 +171,7 @@ export function TaskAddModal({ isOpen, onClose, members, projects, onSubmit }: T
                                 onChange={(event) => handleChange("leader", event.target.value)}
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                             >
+                                <option value="">未選択</option>
                                 {members.map((member) => (
                                     <option key={member.member_id} value={member.member_name}>
                                         {member.member_name}
@@ -179,6 +187,7 @@ export function TaskAddModal({ isOpen, onClose, members, projects, onSubmit }: T
                                 onChange={(event) => handleChange("assignee", event.target.value)}
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                             >
+                                <option value="">未選択</option>
                                 {members.map((member) => (
                                     <option key={member.member_id} value={member.member_name}>
                                         {member.member_name}
@@ -196,7 +205,8 @@ export function TaskAddModal({ isOpen, onClose, members, projects, onSubmit }: T
                                 min={0}
                                 max={100}
                                 value={form.capacity_pct}
-                                onChange={(event) => handleChange("capacity_pct", Number(event.target.value))}
+                                onChange={(event) => handleChange("capacity_pct", event.target.value)}
+                                placeholder="未選択"
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                             />
                         </label>

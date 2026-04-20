@@ -20,6 +20,10 @@ type TaskEditModalProps = {
     onSubmit: (input: UpdateTaskInput) => void;
 };
 
+type TaskEditForm = Omit<UpdateTaskInput, "capacity_pct"> & {
+    capacity_pct: string;
+};
+
 export function TaskEditModal({
     isOpen,
     task,
@@ -28,7 +32,7 @@ export function TaskEditModal({
     onClose,
     onSubmit,
 }: TaskEditModalProps) {
-    const [form, setForm] = useState<UpdateTaskInput | null>(null);
+    const [form, setForm] = useState<TaskEditForm | null>(null);
 
     useEffect(() => {
         if (!task) {
@@ -49,13 +53,13 @@ export function TaskEditModal({
             manager: task.manager,
             leader: task.leader,
             assignee: task.assignee,
-            capacity_pct: task.capacity_pct,
+            capacity_pct: task.capacity_pct ? String(task.capacity_pct) : "",
         });
     }, [task]);
 
     if (!isOpen || !form) return null;
 
-    const handleChange = <K extends keyof UpdateTaskInput>(key: K, value: UpdateTaskInput[K]) => {
+    const handleChange = <K extends keyof TaskEditForm>(key: K, value: TaskEditForm[K]) => {
         setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
     };
 
@@ -68,7 +72,7 @@ export function TaskEditModal({
             task_name: form.task_name.trim() || "名称未設定タスク",
             description: form.description.trim(),
             memo: form.memo.trim(),
-            capacity_pct: Number(form.capacity_pct) || 0,
+            capacity_pct: form.capacity_pct === "" ? 0 : Number(form.capacity_pct) || 0,
         });
 
         onClose();
@@ -80,7 +84,7 @@ export function TaskEditModal({
                 <div className="mb-6 flex items-start justify-between gap-4">
                     <div>
                         <h2 className="text-2xl font-extrabold text-slate-900">タスク編集</h2>
-                        <p className="mt-1 text-sm font-medium text-slate-500">ステータス・担当者・差配先・キャパまで更新できます</p>
+                        <p className="mt-1 text-sm font-medium text-slate-500">担当とキャパは未選択に戻すこともできます</p>
                     </div>
 
                     <button
@@ -171,7 +175,8 @@ export function TaskEditModal({
                                 min={0}
                                 max={100}
                                 value={form.capacity_pct}
-                                onChange={(event) => handleChange("capacity_pct", Number(event.target.value))}
+                                onChange={(event) => handleChange("capacity_pct", event.target.value)}
+                                placeholder="未選択"
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                             />
                         </label>
@@ -185,6 +190,7 @@ export function TaskEditModal({
                                 onChange={(event) => handleChange("manager", event.target.value)}
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                             >
+                                <option value="">未選択</option>
                                 {members.map((member) => (
                                     <option key={member.member_id} value={member.member_name}>
                                         {member.member_name}
@@ -200,6 +206,7 @@ export function TaskEditModal({
                                 onChange={(event) => handleChange("leader", event.target.value)}
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                             >
+                                <option value="">未選択</option>
                                 {members.map((member) => (
                                     <option key={member.member_id} value={member.member_name}>
                                         {member.member_name}
@@ -215,6 +222,7 @@ export function TaskEditModal({
                                 onChange={(event) => handleChange("assignee", event.target.value)}
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                             >
+                                <option value="">未選択</option>
                                 {members.map((member) => (
                                     <option key={member.member_id} value={member.member_name}>
                                         {member.member_name}
