@@ -29,13 +29,19 @@ const initialForm: TaskAddForm = {
     memo: "",
 };
 
-export function TaskAddModal({ isOpen, onClose, members, projects, onSubmit }: TaskAddModalProps) {
+export function TaskAddModal({
+    isOpen,
+    onClose,
+    members,
+    projects,
+    onSubmit,
+}: TaskAddModalProps) {
     const [form, setForm] = useState<TaskAddForm>(initialForm);
 
     useEffect(() => {
         if (!isOpen) return;
 
-        const defaultManager = members.find((member) => member.member_role === "マネージャー")?.member_name ?? "";
+        const defaultManager = members[0]?.member_name ?? "";
 
         setForm({
             ...initialForm,
