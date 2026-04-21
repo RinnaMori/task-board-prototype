@@ -5,11 +5,11 @@ import type { Member, Task } from "@/types/dashboard";
 import { getTodayStatus, loadScheduleStore } from "@/lib/schedule-utils";
 import { inferRoleFromName, sortTasksForDashboard } from "@/lib/dashboard-store";
 import type { ScheduleType } from "@/types/schedule";
-import { MemberScheduleDetailModal } from "./MemberScheduleDetailModal";
 import { TaskCard } from "./TaskCard";
 
 type MemberColumnProps = {
     member: Member;
+    totalCapacityPct: number;
     onEditTask: (task: Task) => void;
     onDeleteTask: (taskId: string) => void;
     onCompleteTask: (taskId: string) => void;
@@ -42,26 +42,17 @@ const roleBadgeMap: Record<string, string> = {
 
 function TodayStatusBadge({ status }: { status: ScheduleType | null }) {
     if (status === "available") {
-        return (
-            <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
-                今日 ⭕
-            </span>
-        );
+        return <span className="text-[10px] font-bold text-emerald-600">⭕</span>;
     }
-
     if (status === "unavailable") {
-        return (
-            <span className="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-700">
-                今日 ❌
-            </span>
-        );
+        return <span className="text-[10px] font-bold text-rose-600">❌</span>;
     }
-
     return null;
 }
 
 export function MemberColumn({
     member,
+    totalCapacityPct,
     onEditTask,
     onDeleteTask,
     onCompleteTask,
@@ -74,9 +65,9 @@ export function MemberColumn({
     const avatarColor = avatarColorMap[member.columnColor] ?? "bg-slate-100 text-slate-700";
     const inferredRole = inferRoleFromName(member.member_name);
     const roleBadge = roleBadgeMap[inferredRole] ?? "bg-slate-100 text-slate-700";
-    const [isDragOver, setIsDragOver] = useState(false);
+
     const [todayStatus, setTodayStatus] = useState<ScheduleType | null>(null);
-    const [isDetailOpen, setIsDetailOpen] = useState(false);
+    const [isDragOver, setIsDragOver] = useState(false);
 
     useEffect(() => {
         const syncStatus = () => {
@@ -96,97 +87,88 @@ export function MemberColumn({
 
     const sortedTasks = sortTasksForDashboard(member.tasks);
 
+    const raw = Math.max(0, totalCapacityPct);
+    const percent = Math.min(raw, 100);
+
+    const color =
+        percent >= 81 ? "bg-rose-500" : percent >= 51 ? "bg-amber-500" : "bg-emerald-500";
+
     return (
-        <>
-            <section
-                onDragOver={(event) => {
-                    event.preventDefault();
-                    setIsDragOver(true);
-                }}
-                onDragLeave={() => setIsDragOver(false)}
-                onDrop={(event) => {
-                    event.preventDefault();
-                    setIsDragOver(false);
-                    onDropTask(member.member_name);
-                }}
-                className={`flex h-[720px] w-[296px] shrink-0 flex-col rounded-[24px] border border-slate-200 border-t-4 px-4 py-4 shadow-sm transition ${isDragOver ? "bg-sky-50 ring-2 ring-sky-300" : "bg-slate-50"
-                    } ${member.columnColor}`}
-            >
-                <div className="mb-4">
-                    <div className="mb-3 flex items-start justify-between gap-2">
-                        <div className="flex min-w-0 items-center gap-3">
-                            <button
-                                type="button"
-                                onClick={() => setIsDetailOpen(true)}
-                                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold ${avatarColor}`}
-                            >
-                                {member.initials}
-                            </button>
-
-                            <button
-                                type="button"
-                                onClick={() => setIsDetailOpen(true)}
-                                className="min-w-0 text-left"
-                            >
-                                <div className="flex flex-wrap items-center gap-2">
-                                    <h2 className="truncate text-base font-bold text-slate-900">{member.member_name}</h2>
-                                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${roleBadge}`}>
-                                        {inferredRole}
-                                    </span>
-                                    <TodayStatusBadge status={todayStatus} />
-                                </div>
-                                <p className="text-xs font-medium text-slate-500">期日が今日のタスク数</p>
-                            </button>
-                        </div>
-
-                        <div className="flex shrink-0 items-start gap-2">
-                            <div className="text-right">
-                                <p className="text-[11px] font-semibold text-slate-500">当日件数</p>
-                                <p className="text-2xl font-extrabold leading-none text-slate-900">{member.due_today_count}</p>
-                            </div>
-                            <button
-                                type="button"
-                                onClick={() => onDeleteMember(member.member_id)}
-                                className="rounded-lg border border-rose-200 px-2 py-1 text-[10px] font-bold text-rose-600 transition hover:bg-rose-50"
-                            >
-                                削除
-                            </button>
-                        </div>
+        <section
+            onDragOver={(event) => {
+                event.preventDefault();
+                setIsDragOver(true);
+            }}
+            onDragLeave={() => setIsDragOver(false)}
+            onDrop={(event) => {
+                event.preventDefault();
+                setIsDragOver(false);
+                onDropTask(member.member_name);
+            }}
+            className={`flex h-[720px] shrink-0 basis-[calc((100%-3rem)/4)] min-w-[280px] flex-col rounded-[24px] border border-slate-200 border-t-4 px-4 py-4 shadow-sm transition ${isDragOver ? "bg-sky-50 ring-2 ring-sky-300" : "bg-slate-50"
+                } ${member.columnColor}`}
+        >
+            <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="min-w-0 flex items-center gap-2">
+                    <div
+                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${avatarColor}`}
+                    >
+                        {member.initials}
                     </div>
-
-                    <div className="mt-2 flex justify-between text-[11px] font-semibold text-slate-500">
-                        <span>{member.capacity_label}</span>
-                        <span>表示中 {sortedTasks.length} 件</span>
+                    <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <span className="truncate text-sm font-bold text-slate-900">{member.member_name}</span>
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] ${roleBadge}`}>
+                                {inferredRole}
+                            </span>
+                            <TodayStatusBadge status={todayStatus} />
+                        </div>
                     </div>
                 </div>
 
-                <div className="flex-1 space-y-3 overflow-y-auto pr-1">
-                    {sortedTasks.length > 0 ? (
-                        sortedTasks.map((task) => (
-                            <TaskCard
-                                key={task.task_id}
-                                task={task}
-                                onEdit={onEditTask}
-                                onDelete={onDeleteTask}
-                                onComplete={onCompleteTask}
-                                isDragging={draggingTaskId === task.task_id}
-                                onDragStart={() => onDragStartTask(task.task_id)}
-                                onDragEnd={onDragEndTask}
-                            />
-                        ))
-                    ) : (
-                        <div className="rounded-2xl border border-dashed border-slate-300 bg-white/80 p-5 text-center text-sm font-medium text-slate-400">
-                            表示対象タスクなし / ここにドロップ
-                        </div>
-                    )}
-                </div>
-            </section>
+                <button
+                    type="button"
+                    onClick={() => onDeleteMember(member.member_id)}
+                    className="shrink-0 rounded-lg border border-rose-200 px-2 py-1 text-[10px] font-bold text-rose-600 transition hover:bg-rose-50"
+                >
+                    削除
+                </button>
+            </div>
 
-            <MemberScheduleDetailModal
-                isOpen={isDetailOpen}
-                memberName={member.member_name}
-                onClose={() => setIsDetailOpen(false)}
-            />
-        </>
+            <div className="mb-3 flex items-center gap-2">
+                <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">
+                    <div className={`h-full ${color}`} style={{ width: `${percent}%` }} />
+                </div>
+                <div className="w-[56px] shrink-0 text-right text-xs font-bold text-slate-700">
+                    {raw}%
+                </div>
+            </div>
+
+            <div className="mb-3 flex items-center justify-between text-[11px] font-semibold text-slate-500">
+                <span>{member.capacity_label}</span>
+                <span>{sortedTasks.length} 件</span>
+            </div>
+
+            <div className="flex-1 space-y-2 overflow-y-auto pr-1">
+                {sortedTasks.length > 0 ? (
+                    sortedTasks.map((task) => (
+                        <TaskCard
+                            key={task.task_id}
+                            task={task}
+                            onEdit={onEditTask}
+                            onDelete={onDeleteTask}
+                            onComplete={onCompleteTask}
+                            isDragging={draggingTaskId === task.task_id}
+                            onDragStart={() => onDragStartTask(task.task_id)}
+                            onDragEnd={onDragEndTask}
+                        />
+                    ))
+                ) : (
+                    <div className="rounded-2xl border border-dashed border-slate-300 bg-white/80 p-5 text-center text-sm font-medium text-slate-400">
+                        表示対象タスクなし / ここにドロップ
+                    </div>
+                )}
+            </div>
+        </section>
     );
 }

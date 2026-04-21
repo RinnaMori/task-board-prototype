@@ -223,6 +223,17 @@ export function DashboardBoard() {
 
   const assignmentMatrix = useMemo(() => buildAssignmentMatrix(tasks), [tasks]);
 
+  const totalCapacityByMemberId = useMemo(() => {
+    return new Map(
+      members.map((member) => [
+        member.member_id,
+        member.tasks
+          .filter((task) => task.status !== "完了")
+          .reduce((sum, task) => sum + (task.capacity_pct || 0), 0),
+      ]),
+    );
+  }, [members]);
+
   const handleDeleteTask = (taskId: string) => {
     setMembers(
       rawMembers.map((member) => ({
@@ -498,6 +509,7 @@ export function DashboardBoard() {
             <MemberColumn
               key={member.member_id}
               member={member}
+              totalCapacityPct={totalCapacityByMemberId.get(member.member_id) ?? 0}
               onEditTask={handleEditTask}
               onDeleteTask={handleDeleteTask}
               onCompleteTask={handleCompleteTask}
