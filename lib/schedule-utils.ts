@@ -1,6 +1,5 @@
 "use client";
 
-import { defaultScheduleStore } from "@/data/schedule-mock";
 import type {
     MemberSchedule,
     ScheduleRange,
@@ -99,24 +98,12 @@ export function sortScheduleRanges(ranges: ScheduleRange[]) {
 }
 
 export function loadScheduleStore(): ScheduleStore {
-    if (typeof window === "undefined") return defaultScheduleStore;
-
-    const raw = window.localStorage.getItem(SCHEDULE_STORAGE_KEY);
-    if (!raw) {
-        return defaultScheduleStore;
-    }
-
-    try {
-        const parsed = JSON.parse(raw) as ScheduleStore;
-        if (!parsed || !Array.isArray(parsed.members)) return defaultScheduleStore;
-        return parsed;
-    } catch {
-        return defaultScheduleStore;
-    }
+    return {
+        members: [],
+    };
 }
 
-export function saveScheduleStore(store: ScheduleStore) {
+export function saveScheduleStore() {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem(SCHEDULE_STORAGE_KEY, JSON.stringify(store));
     window.dispatchEvent(new Event("schedule-store-updated"));
 }

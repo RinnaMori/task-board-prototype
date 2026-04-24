@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { defaultStore } from "@/data/mock-data";
 import { fetchSupabaseDashboardStore } from "@/lib/supabase/dashboard-reader";
+import { getSupabaseClient } from "@/lib/supabase/client";
 import type {
     AssignmentHistoryItem,
     AssignmentMatrixRow,
@@ -18,15 +18,22 @@ import type {
     TaskStatus,
 } from "@/types/dashboard";
 
-const STORAGE_KEY = "task-dashboard-store-v3";
 const STORE_EVENT_NAME = "dashboard-store-updated";
+
+const EMPTY_STORE: DashboardStore = {
+    members: [],
+    projects: [],
+};
 
 export const PRIORITY_OPTIONS: TaskPriority[] = ["高", "中", "低"];
 export const STATUS_OPTIONS: TaskStatus[] = ["未着手", "進行中", "完了", "保留"];
 export const ROLE_OPTIONS: MemberRole[] = ["マネージャー", "リーダー", "正社員", "業務委託"];
 
 export function cloneDefaultStore(): DashboardStore {
-    return JSON.parse(JSON.stringify(defaultStore)) as DashboardStore;
+    return {
+        members: [],
+        projects: [],
+    };
 }
 
 export function inferRoleFromName(name: string): MemberRole {
@@ -244,56 +251,72 @@ export function normalizeStore(input: DashboardStore): DashboardStore {
 }
 
 export function loadDashboardStore(): DashboardStore {
-    if (typeof window === "undefined") return cloneDefaultStore();
-
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return cloneDefaultStore();
-
-    try {
-        return normalizeStore(JSON.parse(raw) as DashboardStore);
-    } catch {
-        return cloneDefaultStore();
-    }
+    return cloneDefaultStore();
 }
 
-export function saveDashboardStore(store: DashboardStore) {
+export function saveDashboardStore() {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
     window.dispatchEvent(new Event(STORE_EVENT_NAME));
 }
 
 export function useDashboardStore() {
-    const [store, setStore] = useState<DashboardStore>(() => loadDashboardStore());
+    const [store, setStore] = useState<DashboardStore>(EMPTY_STORE);
 
     useEffect(() => {
         let active = true;
-
-        const syncFromStorage = () => {
-            setStore(loadDashboardStore());
-        };
 
         const syncFromSupabase = async () => {
             try {
                 const remoteStore = await fetchSupabaseDashboardStore();
                 if (!active) return;
 
-                const normalized = normalizeStore(remoteStore);
-                setStore(normalized);
-                saveDashboardStore(normalized);
+                setStore(normalizeStore(remoteStore));
             } catch (error) {
                 console.error("Supabase 読み込み失敗", error);
             }
         };
 
-        window.addEventListener("storage", syncFromStorage);
-        window.addEventListener(STORE_EVENT_NAME, syncFromStorage as EventListener);
+        const handleDashboardUpdated = () => {
+            void syncFromSupabase();
+        };
 
-        syncFromSupabase();
+        const handleFocus = () => {
+            void syncFromSupabase();
+        };
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === "visible") {
+                void syncFromSupabase();
+            }
+        };
+
+        const supabase = getSupabaseClient();
+
+        const channel = supabase
+            .channel("dashboard-realtime")
+            .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, () => {
+                void syncFromSupabase();
+            })
+            .on("postgres_changes", { event: "*", schema: "public", table: "members" }, () => {
+                void syncFromSupabase();
+            })
+            .on("postgres_changes", { event: "*", schema: "public", table: "projects" }, () => {
+                void syncFromSupabase();
+            })
+            .subscribe();
+
+        void syncFromSupabase();
+
+        window.addEventListener(STORE_EVENT_NAME, handleDashboardUpdated);
+        window.addEventListener("focus", handleFocus);
+        document.addEventListener("visibilitychange", handleVisibilityChange);
 
         return () => {
             active = false;
-            window.removeEventListener("storage", syncFromStorage);
-            window.removeEventListener(STORE_EVENT_NAME, syncFromStorage as EventListener);
+            supabase.removeChannel(channel);
+            window.removeEventListener(STORE_EVENT_NAME, handleDashboardUpdated);
+            window.removeEventListener("focus", handleFocus);
+            document.removeEventListener("visibilitychange", handleVisibilityChange);
         };
     }, []);
 
@@ -304,10 +327,9 @@ export function useDashboardStore() {
     const dashboardTasks = useMemo(() => getDashboardVisibleTasks(members), [members]);
     const statusSummary = useMemo(() => members.map((member) => getMemberStatusSummary(member)), [members]);
 
-    const updateStore = (nextStore: DashboardStore) => {
-        const normalized = normalizeStore(nextStore);
-        setStore(normalized);
-        saveDashboardStore(normalized);
+    const updateStore = (getNextStore: (currentStore: DashboardStore) => DashboardStore) => {
+        setStore((currentStore) => normalizeStore(getNextStore(currentStore)));
+        saveDashboardStore();
     };
 
     return {
@@ -320,16 +342,16 @@ export function useDashboardStore() {
         dashboardTasks,
         statusSummary,
         setMembers: (membersToSave: Member[]) => {
-            updateStore({
-                ...store,
+            updateStore((currentStore) => ({
+                ...currentStore,
                 members: membersToSave,
-            });
+            }));
         },
         setProjects: (projectsToSave: Project[]) => {
-            updateStore({
-                ...store,
+            updateStore((currentStore) => ({
+                ...currentStore,
                 projects: projectsToSave,
-            });
+            }));
         },
     };
 }

@@ -18,6 +18,8 @@ import {
     updateSupabaseScheduleEntry,
 } from "@/lib/supabase/schedule-store";
 import type { MemberSchedule, ScheduleStore, ScheduleType } from "@/types/schedule";
+import { getSupabaseClient } from "@/lib/supabase/client";
+
 
 function getCellClasses(
     current: ScheduleType | null,
@@ -58,48 +60,33 @@ export function ScheduleBoard() {
     useEffect(() => {
         let active = true;
 
-        const guardedRefresh = async () => {
+        const load = async () => {
+            const data = await fetchSupabaseScheduleStoreForActiveMembers();
             if (!active) return;
-            try {
-                const nextStore = await buildScheduleStoreFromSupabase();
-                if (!active) return;
-                setStore(nextStore);
-            } catch (error) {
-                console.error("❌ schedule Supabase読み込み失敗", error);
-            }
+            setStore(data);
         };
 
-        const handleScheduleUpdated = () => {
-            void guardedRefresh();
-        };
+        const supabase = getSupabaseClient();
 
-        const handleDashboardUpdated = () => {
-            void guardedRefresh();
-        };
+        const channel = supabase
+            .channel("schedule-realtime")
+            .on(
+                "postgres_changes",
+                { event: "*", schema: "public", table: "schedules" },
+                () => load(),
+            )
+            .on(
+                "postgres_changes",
+                { event: "*", schema: "public", table: "members" },
+                () => load(),
+            )
+            .subscribe();
 
-        const handleFocus = () => {
-            void guardedRefresh();
-        };
-
-        const handleVisibilityChange = () => {
-            if (document.visibilityState === "visible") {
-                void guardedRefresh();
-            }
-        };
-
-        void guardedRefresh();
-
-        window.addEventListener("schedule-store-updated", handleScheduleUpdated);
-        window.addEventListener("dashboard-store-updated", handleDashboardUpdated);
-        window.addEventListener("focus", handleFocus);
-        document.addEventListener("visibilitychange", handleVisibilityChange);
+        load();
 
         return () => {
             active = false;
-            window.removeEventListener("schedule-store-updated", handleScheduleUpdated);
-            window.removeEventListener("dashboard-store-updated", handleDashboardUpdated);
-            window.removeEventListener("focus", handleFocus);
-            document.removeEventListener("visibilitychange", handleVisibilityChange);
+            supabase.removeChannel(channel);
         };
     }, []);
 

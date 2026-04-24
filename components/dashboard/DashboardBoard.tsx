@@ -14,14 +14,22 @@ import {
   isOverdue,
   useDashboardStore,
 } from "@/lib/dashboard-store";
-import { getSupabaseClient } from "@/lib/supabase/client";
 import {
-  createEmptyMemberSchedule,
-  loadScheduleStore,
-  saveScheduleStore,
-} from "@/lib/schedule-utils";
+  completeDashboardTask,
+  deleteDashboardMemberWithRelatedData,
+  deleteDashboardTask,
+  getNextMemberCodeFromSupabase,
+  getNextProjectCodeFromSupabase,
+  getNextTaskCodeFromSupabase,
+  insertDashboardMember,
+  insertDashboardProject,
+  insertDashboardTask,
+  insertSingleTaskAssignmentHistory,
+  insertTaskAssignmentHistory,
+  updateDashboardTaskAssignee,
+  updateDashboardTaskByCode,
+} from "@/lib/supabase/dashboard-writer";
 import type {
-  AssignmentHistoryItem,
   Member,
   MemberRole,
   NewTaskInput,
@@ -38,39 +46,6 @@ import { MemberColumn } from "./MemberColumn";
 import { ProjectAddModal } from "./ProjectAddModal";
 import { TaskAddModal } from "./TaskAddModal";
 import { TaskEditModal } from "./TaskEditModal";
-
-function getNextTaskId(members: Member[]) {
-  const maxNumber = members
-    .flatMap((member) => member.tasks)
-    .map((task) => Number(task.task_id.replace(/[^0-9]/g, "")) || 0)
-    .reduce((max, current) => Math.max(max, current), 0);
-
-  return `T-${String(maxNumber + 1).padStart(3, "0")}`;
-}
-
-function getNextProjectCode(projects: { project_id: string }[]) {
-  const maxNumber = projects
-    .map((project) => Number(project.project_id.replace(/[^0-9]/g, "")) || 0)
-    .reduce((max, current) => Math.max(max, current), 0);
-
-  return `P-${String(maxNumber + 1).padStart(3, "0")}`;
-}
-
-async function getNextMemberCodeFromSupabase() {
-  const supabase = getSupabaseClient();
-
-  const { data, error } = await supabase.from("members").select("member_code");
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  const maxNumber = (data ?? [])
-    .map((row) => Number(String(row.member_code ?? "").replace(/[^0-9]/g, "")) || 0)
-    .reduce((max, current) => Math.max(max, current), 0);
-
-  return `M-${String(maxNumber + 1).padStart(3, "0")}`;
-}
 
 function moveTaskBetweenMembers(
   members: Member[],
@@ -161,50 +136,6 @@ function insertMemberByRoleOrder(
   }
 
   return [...members.slice(0, insertIndex), newMember, ...members.slice(insertIndex)];
-}
-
-function toHistoryInsertRows(taskDbId: string, history: AssignmentHistoryItem[]) {
-  return history.map((item) => ({
-    task_id: taskDbId,
-    from_member_name: item.from,
-    to_member_name: item.to,
-    assignment_role: item.role,
-    changed_at: item.changed_at,
-  }));
-}
-
-async function findLatestTaskRowIdByTaskCode(taskCode: string): Promise<{ id: string } | null> {
-  const supabase = getSupabaseClient();
-
-  const { data, error } = await supabase
-    .from("tasks")
-    .select("id")
-    .eq("task_code", taskCode)
-    .order("created_at", { ascending: false })
-    .limit(1);
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  return data && data.length > 0 ? { id: data[0].id as string } : null;
-}
-
-async function findMemberRowId(memberId: string, memberName: string): Promise<string | null> {
-  const supabase = getSupabaseClient();
-
-  const { data, error } = await supabase
-    .from("members")
-    .select("id")
-    .or(`member_code.eq.${memberId},member_name.eq.${memberName}`)
-    .order("display_order", { ascending: true })
-    .limit(1);
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  return data && data.length > 0 ? (data[0].id as string) : null;
 }
 
 export function DashboardBoard() {
@@ -304,36 +235,7 @@ export function DashboardBoard() {
 
   const handleDeleteTask = async (taskId: string) => {
     try {
-      const existingTaskRow = await findLatestTaskRowIdByTaskCode(taskId);
-
-      if (!existingTaskRow) {
-        alert("削除失敗: 対象タスクが見つかりません");
-        return;
-      }
-
-      const supabase = getSupabaseClient();
-
-      const { error: historyDeleteError } = await supabase
-        .from("task_assignment_history")
-        .delete()
-        .eq("task_id", existingTaskRow.id);
-
-      if (historyDeleteError) {
-        console.error("❌ Supabase 履歴削除失敗", historyDeleteError);
-        alert(`削除失敗: ${historyDeleteError.message}`);
-        return;
-      }
-
-      const { error: taskDeleteError } = await supabase
-        .from("tasks")
-        .delete()
-        .eq("id", existingTaskRow.id);
-
-      if (taskDeleteError) {
-        console.error("❌ Supabase tasks 削除失敗", taskDeleteError);
-        alert(`削除失敗: ${taskDeleteError.message}`);
-        return;
-      }
+      await deleteDashboardTask(taskId);
 
       setMembers(
         rawMembers.map((member) => ({
@@ -351,29 +253,7 @@ export function DashboardBoard() {
     const completedAt = formatNow();
 
     try {
-      const existingTaskRow = await findLatestTaskRowIdByTaskCode(taskId);
-
-      if (!existingTaskRow) {
-        alert("完了保存失敗: 対象タスクが見つかりません");
-        return;
-      }
-
-      const supabase = getSupabaseClient();
-
-      const { error: taskUpdateError } = await supabase
-        .from("tasks")
-        .update({
-          status: "完了",
-          progress_pct: 100,
-          completed_at: completedAt,
-        })
-        .eq("id", existingTaskRow.id);
-
-      if (taskUpdateError) {
-        console.error("❌ Supabase tasks 完了更新失敗", taskUpdateError);
-        alert(`完了保存失敗: ${taskUpdateError.message}`);
-        return;
-      }
+      await completeDashboardTask(taskId, completedAt);
 
       setMembers(
         rawMembers.map((member) => ({
@@ -410,81 +290,15 @@ export function DashboardBoard() {
     if (!confirmed) return;
 
     try {
-      const supabase = getSupabaseClient();
-
-      const taskCodes = targetMember.tasks.map((task) => task.task_id);
-
-      if (taskCodes.length > 0) {
-        const { data: taskRows, error: taskRowsError } = await supabase
-          .from("tasks")
-          .select("id")
-          .in("task_code", taskCodes);
-
-        if (taskRowsError) {
-          console.error("❌ Supabase tasks 取得失敗", taskRowsError);
-          alert(`メンバー削除失敗: ${taskRowsError.message}`);
-          return;
-        }
-
-        const taskIds = (taskRows ?? []).map((row) => row.id as string);
-
-        if (taskIds.length > 0) {
-          const { error: historyDeleteError } = await supabase
-            .from("task_assignment_history")
-            .delete()
-            .in("task_id", taskIds);
-
-          if (historyDeleteError) {
-            console.error("❌ Supabase 履歴削除失敗", historyDeleteError);
-            alert(`メンバー削除失敗: ${historyDeleteError.message}`);
-            return;
-          }
-
-          const { error: taskDeleteError } = await supabase
-            .from("tasks")
-            .delete()
-            .in("id", taskIds);
-
-          if (taskDeleteError) {
-            console.error("❌ Supabase tasks 削除失敗", taskDeleteError);
-            alert(`メンバー削除失敗: ${taskDeleteError.message}`);
-            return;
-          }
-        }
-      }
-
-      const { error: scheduleDeleteError } = await supabase
-        .from("schedules")
-        .delete()
-        .eq("member_name", targetMember.member_name);
-
-      if (scheduleDeleteError) {
-        console.error("❌ Supabase schedules 削除失敗", scheduleDeleteError);
-        alert(`メンバー削除失敗: ${scheduleDeleteError.message}`);
-        return;
-      }
-
-      const memberRowId = await findMemberRowId(targetMember.member_id, targetMember.member_name);
-
-      if (memberRowId) {
-        const { error: memberUpdateError } = await supabase
-          .from("members")
-          .update({ is_active: false })
-          .eq("id", memberRowId);
-
-        if (memberUpdateError) {
-          console.error("❌ Supabase members 更新失敗", memberUpdateError);
-          alert(`メンバー削除失敗: ${memberUpdateError.message}`);
-          return;
-        }
-      }
+      await deleteDashboardMemberWithRelatedData({
+        memberId: targetMember.member_id,
+        memberName: targetMember.member_name,
+        taskCodes: targetMember.tasks.map((task) => task.task_id),
+      });
 
       setMembers(rawMembers.filter((member) => member.member_id !== memberId));
-
-      const scheduleStore = loadScheduleStore();
-      saveScheduleStore({
-        members: scheduleStore.members.filter((member) => member.member_name !== targetMember.member_name),
-      });
+      window.dispatchEvent(new Event("dashboard-store-updated"));
+      window.dispatchEvent(new Event("schedule-store-updated"));
     } catch (error) {
       console.error("❌ Supabaseエラー", error);
       alert(error instanceof Error ? `メンバー削除失敗: ${error.message}` : "メンバー削除失敗");
@@ -500,75 +314,55 @@ export function DashboardBoard() {
     const targetMemberName = getFallbackMemberName(rawMembers, newTask);
     if (!targetMemberName) return;
 
-    const nextTask: Task = {
-      task_id: getNextTaskId(rawMembers),
-      task_name: newTask.task_name,
-      project_name: newTask.project_name,
-      priority: newTask.priority,
-      status: "未着手",
-      progress_pct: 0,
-      manager: newTask.manager,
-      leader: newTask.leader,
-      assignee: newTask.assignee,
-      capacity_pct: newTask.capacity_pct,
-      assigned_to: newTask.assignee,
-      description: newTask.description,
-      flow_from: newTask.leader || newTask.manager,
-      flow_to: newTask.assignee,
-      accentColor: projectColor.accentColor,
-      color: projectColor.color,
-      due_date: newTask.due_date,
-      memo: newTask.memo,
-      completed_at: null,
-      assignment_history: createInitialAssignmentHistory(newTask),
-    };
-
     try {
-      const supabase = getSupabaseClient();
+      const taskCode = await getNextTaskCodeFromSupabase();
 
-      const { data: insertedTask, error: taskInsertError } = await supabase
-        .from("tasks")
-        .insert({
-          task_code: nextTask.task_id,
-          task_name: nextTask.task_name,
-          project_name: nextTask.project_name,
-          priority: nextTask.priority,
-          status: nextTask.status,
-          progress_pct: nextTask.progress_pct,
-          manager_name: nextTask.manager,
-          leader_name: nextTask.leader,
-          assignee_name: nextTask.assignee,
-          assigned_to: nextTask.assigned_to,
-          capacity_pct: nextTask.capacity_pct,
-          description: nextTask.description,
-          flow_from: nextTask.flow_from,
-          flow_to: nextTask.flow_to,
-          accent_color: nextTask.accentColor,
-          color: nextTask.color,
-          due_date: nextTask.due_date || null,
-          memo: nextTask.memo,
-          completed_at: null,
-        })
-        .select("id")
-        .single();
+      const nextTask: Task = {
+        task_id: taskCode,
+        task_name: newTask.task_name,
+        project_name: newTask.project_name,
+        priority: newTask.priority,
+        status: "未着手",
+        progress_pct: 0,
+        manager: newTask.manager,
+        leader: newTask.leader,
+        assignee: newTask.assignee,
+        capacity_pct: newTask.capacity_pct,
+        assigned_to: newTask.assignee,
+        description: newTask.description,
+        flow_from: newTask.leader || newTask.manager,
+        flow_to: newTask.assignee,
+        accentColor: projectColor.accentColor,
+        color: projectColor.color,
+        due_date: newTask.due_date,
+        memo: newTask.memo,
+        completed_at: null,
+        assignment_history: createInitialAssignmentHistory(newTask),
+      };
 
-      if (taskInsertError) {
-        console.error("❌ Supabase tasks 保存失敗", taskInsertError);
-        alert(`Supabase保存失敗: ${taskInsertError.message}`);
-        return;
-      }
+      const insertedTask = await insertDashboardTask({
+        task_code: nextTask.task_id,
+        task_name: nextTask.task_name,
+        project_name: nextTask.project_name,
+        priority: nextTask.priority,
+        status: nextTask.status,
+        progress_pct: nextTask.progress_pct,
+        manager_name: nextTask.manager,
+        leader_name: nextTask.leader,
+        assignee_name: nextTask.assignee,
+        assigned_to: nextTask.assigned_to,
+        capacity_pct: nextTask.capacity_pct,
+        description: nextTask.description,
+        flow_from: nextTask.flow_from,
+        flow_to: nextTask.flow_to,
+        accent_color: nextTask.accentColor,
+        color: nextTask.color,
+        due_date: nextTask.due_date || null,
+        memo: nextTask.memo,
+        completed_at: null,
+      });
 
-      if (insertedTask?.id && nextTask.assignment_history.length > 0) {
-        const { error: historyInsertError } = await supabase
-          .from("task_assignment_history")
-          .insert(toHistoryInsertRows(insertedTask.id, nextTask.assignment_history));
-
-        if (historyInsertError) {
-          console.error("❌ Supabase task_assignment_history 保存失敗", historyInsertError);
-          alert(`履歴保存失敗: ${historyInsertError.message}`);
-          return;
-        }
-      }
+      await insertTaskAssignmentHistory(insertedTask.id, nextTask.assignment_history);
 
       setMembers(
         rawMembers.map((member) => {
@@ -624,62 +418,36 @@ export function DashboardBoard() {
     const ownerChanged = currentOwnerName !== targetMemberName;
 
     try {
-      const existingTaskRow = await findLatestTaskRowIdByTaskCode(updatedTask.task_id);
-
-      if (!existingTaskRow) {
-        alert("Supabase更新失敗: 対象タスクが見つかりません");
-        return;
-      }
-
-      const supabase = getSupabaseClient();
-
-      const { error: taskUpdateError } = await supabase
-        .from("tasks")
-        .update({
-          task_name: updatedTask.task_name,
-          project_name: updatedTask.project_name,
-          priority: updatedTask.priority,
-          description: updatedTask.description,
-          due_date: updatedTask.due_date || null,
-          memo: updatedTask.memo,
-          status: updatedTask.status,
-          progress_pct: updatedTask.progress_pct,
-          manager_name: updatedTask.manager,
-          leader_name: updatedTask.leader,
-          assignee_name: updatedTask.assignee,
-          assigned_to: updatedTask.assignee,
-          capacity_pct: updatedTask.capacity_pct,
-          flow_from: updatedTask.leader || updatedTask.manager,
-          flow_to: updatedTask.assignee,
-          accent_color: projectColor.accentColor,
-          color: projectColor.color,
-          completed_at:
-            updatedTask.status === "完了" ? currentTask.completed_at ?? formatNow() : null,
-        })
-        .eq("id", existingTaskRow.id);
-
-      if (taskUpdateError) {
-        console.error("❌ Supabase tasks 更新失敗", taskUpdateError);
-        alert(`Supabase更新失敗: ${taskUpdateError.message}`);
-        return;
-      }
+      const taskRow = await updateDashboardTaskByCode(updatedTask.task_id, {
+        task_name: updatedTask.task_name,
+        project_name: updatedTask.project_name,
+        priority: updatedTask.priority,
+        description: updatedTask.description,
+        due_date: updatedTask.due_date || null,
+        memo: updatedTask.memo,
+        status: updatedTask.status,
+        progress_pct: updatedTask.progress_pct,
+        manager_name: updatedTask.manager,
+        leader_name: updatedTask.leader,
+        assignee_name: updatedTask.assignee,
+        assigned_to: updatedTask.assignee,
+        capacity_pct: updatedTask.capacity_pct,
+        flow_from: updatedTask.leader || updatedTask.manager,
+        flow_to: updatedTask.assignee,
+        accent_color: projectColor.accentColor,
+        color: projectColor.color,
+        completed_at:
+          updatedTask.status === "完了" ? currentTask.completed_at ?? formatNow() : null,
+      });
 
       if (ownerChanged && currentOwnerName) {
-        const { error: historyInsertError } = await supabase
-          .from("task_assignment_history")
-          .insert({
-            task_id: existingTaskRow.id,
-            from_member_name: currentOwnerName,
-            to_member_name: targetMemberName,
-            assignment_role: "担当変更",
-            changed_at: formatNow(),
-          });
-
-        if (historyInsertError) {
-          console.error("❌ Supabase 履歴追加失敗", historyInsertError);
-          alert(`履歴保存失敗: ${historyInsertError.message}`);
-          return;
-        }
+        await insertSingleTaskAssignmentHistory({
+          taskDbId: taskRow.id,
+          from_member_name: currentOwnerName,
+          to_member_name: targetMemberName,
+          assignment_role: "担当変更",
+          changed_at: formatNow(),
+        });
       }
 
       if (ownerChanged) {
@@ -712,50 +480,35 @@ export function DashboardBoard() {
     member_role: string;
     columnColor: string;
   }) => {
-    const memberCode = await getNextMemberCodeFromSupabase();
-    const newMember: Member = {
-      member_id: memberCode,
-      member_name: input.member_name,
-      initials: getInitials(input.member_name),
-      capacity_pct: 0,
-      capacity_label: "0 件",
-      due_today_count: 0,
-      columnColor: input.columnColor,
-      tasks: [],
-    };
-
     try {
-      const supabase = getSupabaseClient();
+      const memberCode = await getNextMemberCodeFromSupabase();
+
+      const newMember: Member = {
+        member_id: memberCode,
+        member_name: input.member_name,
+        initials: getInitials(input.member_name),
+        capacity_pct: 0,
+        capacity_label: "0 件",
+        due_today_count: 0,
+        columnColor: input.columnColor,
+        tasks: [],
+      };
 
       const displayOrder = rawMembers.length > 0 ? rawMembers.length + 1 : 1;
 
-      const { error } = await supabase
-        .from("members")
-        .insert({
-          member_code: memberCode,
-          member_name: input.member_name,
-          initials: getInitials(input.member_name),
-          role: input.member_role,
-          column_color: input.columnColor,
-          display_order: displayOrder,
-          is_active: true,
-        });
-
-      if (error) {
-        console.error("❌ Supabase members 保存失敗", error);
-        alert(`メンバー保存失敗: ${error.message}`);
-        return;
-      }
+      await insertDashboardMember({
+        member_code: memberCode,
+        member_name: input.member_name,
+        initials: getInitials(input.member_name),
+        role: input.member_role,
+        column_color: input.columnColor,
+        display_order: displayOrder,
+        is_active: true,
+      });
 
       setMembers(insertMemberByRoleOrder(rawMembers, newMember, input.member_role as MemberRole));
-
-      const scheduleStore = loadScheduleStore();
-      const exists = scheduleStore.members.some((member) => member.member_name === input.member_name);
-      if (!exists) {
-        saveScheduleStore({
-          members: [...scheduleStore.members, createEmptyMemberSchedule(input.member_name)],
-        });
-      }
+      window.dispatchEvent(new Event("dashboard-store-updated"));
+      window.dispatchEvent(new Event("schedule-store-updated"));
     } catch (error) {
       console.error("❌ Supabaseエラー", error);
       alert(error instanceof Error ? `メンバー保存失敗: ${error.message}` : "メンバー保存失敗");
@@ -767,26 +520,16 @@ export function DashboardBoard() {
     color: string;
     accentColor: string;
   }) => {
-    const projectCode = getNextProjectCode(projects);
-
     try {
-      const supabase = getSupabaseClient();
+      const projectCode = await getNextProjectCodeFromSupabase();
 
-      const { error } = await supabase
-        .from("projects")
-        .insert({
-          project_code: projectCode,
-          project_name: input.project_name,
-          color: input.color as TaskColor,
-          accent_color: input.accentColor,
-          is_active: true,
-        });
-
-      if (error) {
-        console.error("❌ Supabase projects 保存失敗", error);
-        alert(`プロジェクト保存失敗: ${error.message}`);
-        return;
-      }
+      await insertDashboardProject({
+        project_code: projectCode,
+        project_name: input.project_name,
+        color: input.color as TaskColor,
+        accent_color: input.accentColor,
+        is_active: true,
+      });
 
       setProjects([
         ...projects,
@@ -809,6 +552,7 @@ export function DashboardBoard() {
     const sourceMember = rawMembers.find((member) =>
       member.tasks.some((task) => task.task_id === draggingTaskId),
     );
+
     const currentTask = rawMembers
       .flatMap((member) => member.tasks)
       .find((task) => task.task_id === draggingTaskId);
@@ -824,49 +568,12 @@ export function DashboardBoard() {
     }
 
     try {
-      const existingTaskRow = await findLatestTaskRowIdByTaskCode(draggingTaskId);
-
-      if (!existingTaskRow) {
-        alert("担当変更失敗: 対象タスクが見つかりません");
-        setDraggingTaskId(null);
-        return;
-      }
-
-      const supabase = getSupabaseClient();
-
-      const { error: taskUpdateError } = await supabase
-        .from("tasks")
-        .update({
-          assignee_name: targetMemberName,
-          assigned_to: targetMemberName,
-          flow_from: sourceMember.member_name,
-          flow_to: targetMemberName,
-        })
-        .eq("id", existingTaskRow.id);
-
-      if (taskUpdateError) {
-        console.error("❌ Supabase tasks 担当変更失敗", taskUpdateError);
-        alert(`担当変更失敗: ${taskUpdateError.message}`);
-        setDraggingTaskId(null);
-        return;
-      }
-
-      const { error: historyInsertError } = await supabase
-        .from("task_assignment_history")
-        .insert({
-          task_id: existingTaskRow.id,
-          from_member_name: sourceMember.member_name,
-          to_member_name: targetMemberName,
-          assignment_role: "担当変更",
-          changed_at: formatNow(),
-        });
-
-      if (historyInsertError) {
-        console.error("❌ Supabase 履歴追加失敗", historyInsertError);
-        alert(`履歴保存失敗: ${historyInsertError.message}`);
-        setDraggingTaskId(null);
-        return;
-      }
+      await updateDashboardTaskAssignee({
+        taskCode: draggingTaskId,
+        sourceMemberName: sourceMember.member_name,
+        targetMemberName,
+        changedAt: formatNow(),
+      });
 
       setMembers(moveTaskBetweenMembers(rawMembers, draggingTaskId, targetMemberName));
       setDraggingTaskId(null);
@@ -922,7 +629,9 @@ export function DashboardBoard() {
         </div>
         <div className="rounded-[24px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
           <p className="text-sm font-semibold text-slate-500">ダッシュボード表示中</p>
-          <p className="mt-2 text-4xl font-extrabold text-slate-900">{overview.visibleDashboardTasks}</p>
+          <p className="mt-2 text-4xl font-extrabold text-slate-900">
+            {overview.visibleDashboardTasks}
+          </p>
         </div>
         <div className="rounded-[24px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
           <p className="text-sm font-semibold text-slate-500">期日が今日</p>
@@ -1050,7 +759,9 @@ export function DashboardBoard() {
       <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 px-5 py-4">
           <h2 className="text-xl font-extrabold text-slate-900">現在の差配件数マトリックス</h2>
-          <p className="mt-1 text-sm text-slate-500">誰から誰に、現在何件のタスクが振られているかを集計しています。</p>
+          <p className="mt-1 text-sm text-slate-500">
+            誰から誰に、現在何件のタスクが振られているかを集計しています。
+          </p>
         </div>
         <div className="overflow-x-auto">
           <table className="min-w-full border-collapse text-sm">
