@@ -11,7 +11,6 @@ type DashboardHeaderProps = {
     onOpenTaskModal: () => void;
     onOpenMemberModal: () => void;
     onOpenProjectModal: () => void;
-    onReset: () => void;
 };
 
 export function DashboardHeader({
@@ -22,7 +21,6 @@ export function DashboardHeader({
     onOpenTaskModal,
     onOpenMemberModal,
     onOpenProjectModal,
-    onReset,
 }: DashboardHeaderProps) {
     return (
         <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
@@ -82,13 +80,6 @@ export function DashboardHeader({
                         className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
                     >
                         プロジェクト追加
-                    </button>
-                    <button
-                        type="button"
-                        onClick={onReset}
-                        className="rounded-2xl border border-rose-200 px-4 py-3 text-sm font-bold text-rose-600 transition hover:bg-rose-50"
-                    >
-                        初期化
                     </button>
                 </div>
             </div>

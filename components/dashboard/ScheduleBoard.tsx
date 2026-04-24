@@ -1,22 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "./AppShell";
 import { MemberScheduleDetailModal } from "./MemberScheduleDetailModal";
 import { ScheduleEntryModal } from "./ScheduleEntryModal";
-import { loadDashboardStore } from "@/lib/dashboard-store";
 import {
-    createEmptyMemberSchedule,
     buildTimelineDates,
     getDateStatus,
     getTodayDateString,
     getTypeLabel,
     getWeekdayLabel,
-    loadScheduleStore,
-    saveScheduleStore,
-    sortScheduleRanges,
 } from "@/lib/schedule-utils";
+import {
+    fetchSupabaseScheduleStoreForActiveMembers,
+    insertSupabaseScheduleEntry,
+    updateSupabaseScheduleEntry,
+} from "@/lib/supabase/schedule-store";
 import type { MemberSchedule, ScheduleStore, ScheduleType } from "@/types/schedule";
 
 function getCellClasses(
@@ -33,66 +33,113 @@ function getCellClasses(
     return `${base} ${left} ${right}`;
 }
 
-function mergeMembersWithDashboard(scheduleStore: ScheduleStore): ScheduleStore {
-    const dashboardStore = loadDashboardStore();
-    const dashboardMemberNames = dashboardStore.members.map((member) => member.member_name);
-
-    const existingMap = new Map(scheduleStore.members.map((member) => [member.member_name, member]));
-
-    return {
-        members: dashboardMemberNames.map(
-            (memberName) => existingMap.get(memberName) ?? createEmptyMemberSchedule(memberName),
-        ),
-    };
+async function buildScheduleStoreFromSupabase(): Promise<ScheduleStore> {
+    return fetchSupabaseScheduleStoreForActiveMembers();
 }
 
 export function ScheduleBoard() {
     const [store, setStore] = useState<ScheduleStore>({ members: [] });
     const [isEntryModalOpen, setIsEntryModalOpen] = useState(false);
     const [detailMemberName, setDetailMemberName] = useState<string | null>(null);
+    const [editingRange, setEditingRange] = useState<{
+        member_name: string;
+        range: MemberSchedule["schedules"][number];
+    } | null>(null);
+
+    const refreshStore = useCallback(async () => {
+        try {
+            const nextStore = await buildScheduleStoreFromSupabase();
+            setStore(nextStore);
+        } catch (error) {
+            console.error("❌ schedule Supabase読み込み失敗", error);
+        }
+    }, []);
 
     useEffect(() => {
-        const sync = () => {
-            const merged = mergeMembersWithDashboard(loadScheduleStore());
-            setStore(merged);
-            saveScheduleStore(merged);
+        let active = true;
+
+        const guardedRefresh = async () => {
+            if (!active) return;
+            try {
+                const nextStore = await buildScheduleStoreFromSupabase();
+                if (!active) return;
+                setStore(nextStore);
+            } catch (error) {
+                console.error("❌ schedule Supabase読み込み失敗", error);
+            }
         };
 
-        sync();
-        window.addEventListener("storage", sync);
-        window.addEventListener("schedule-store-updated", sync as EventListener);
+        const handleScheduleUpdated = () => {
+            void guardedRefresh();
+        };
+
+        const handleDashboardUpdated = () => {
+            void guardedRefresh();
+        };
+
+        const handleFocus = () => {
+            void guardedRefresh();
+        };
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === "visible") {
+                void guardedRefresh();
+            }
+        };
+
+        void guardedRefresh();
+
+        window.addEventListener("schedule-store-updated", handleScheduleUpdated);
+        window.addEventListener("dashboard-store-updated", handleDashboardUpdated);
+        window.addEventListener("focus", handleFocus);
+        document.addEventListener("visibilitychange", handleVisibilityChange);
 
         return () => {
-            window.removeEventListener("storage", sync);
-            window.removeEventListener("schedule-store-updated", sync as EventListener);
+            active = false;
+            window.removeEventListener("schedule-store-updated", handleScheduleUpdated);
+            window.removeEventListener("dashboard-store-updated", handleDashboardUpdated);
+            window.removeEventListener("focus", handleFocus);
+            document.removeEventListener("visibilitychange", handleVisibilityChange);
         };
     }, []);
 
     const timelineDates = useMemo(() => buildTimelineDates(14, 0), []);
     const today = getTodayDateString();
 
-    const handleSubmitEntry = (input: {
+    const handleSubmitEntry = async (input: {
         member_name: string;
         weekdays: MemberSchedule["weekdays"];
         work_style: MemberSchedule["work_style"];
         range: MemberSchedule["schedules"][number];
     }) => {
-        const nextStore: ScheduleStore = {
-            members: store.members.map((member) =>
-                member.member_name === input.member_name
-                    ? {
-                        ...member,
-                        weekdays: input.weekdays,
-                        work_style: input.work_style,
-                        schedules: sortScheduleRanges([...member.schedules, input.range]),
-                    }
-                    : member,
-            ),
-        };
+        try {
+            if (editingRange?.range.id) {
+                await updateSupabaseScheduleEntry({
+                    member_name: input.member_name,
+                    weekdays: input.weekdays,
+                    work_style: input.work_style,
+                    range: {
+                        ...input.range,
+                        id: editingRange.range.id,
+                    },
+                });
+            } else {
+                await insertSupabaseScheduleEntry(input);
+            }
 
-        setStore(nextStore);
-        saveScheduleStore(nextStore);
-        setIsEntryModalOpen(false);
+            await refreshStore();
+            window.dispatchEvent(new Event("schedule-store-updated"));
+
+            setIsEntryModalOpen(false);
+            setEditingRange(null);
+        } catch (error) {
+            console.error("❌ schedule Supabase保存失敗", error);
+            alert(
+                error instanceof Error
+                    ? `スケジュール保存失敗: ${error.message}`
+                    : "スケジュール保存失敗",
+            );
+        }
     };
 
     return (
@@ -104,7 +151,10 @@ export function ScheduleBoard() {
                     <div className="flex flex-wrap gap-2">
                         <button
                             type="button"
-                            onClick={() => setIsEntryModalOpen(true)}
+                            onClick={() => {
+                                setEditingRange(null);
+                                setIsEntryModalOpen(true);
+                            }}
                             className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700"
                         >
                             新規登録
@@ -168,14 +218,22 @@ export function ScheduleBoard() {
             <ScheduleEntryModal
                 isOpen={isEntryModalOpen}
                 members={store.members}
-                onClose={() => setIsEntryModalOpen(false)}
+                onClose={() => {
+                    setIsEntryModalOpen(false);
+                    setEditingRange(null);
+                }}
                 onSubmit={handleSubmitEntry}
+                editingRange={editingRange}
             />
 
             <MemberScheduleDetailModal
                 isOpen={Boolean(detailMemberName)}
                 memberName={detailMemberName}
                 onClose={() => setDetailMemberName(null)}
+                onEdit={(member_name, range) => {
+                    setEditingRange({ member_name, range });
+                    setIsEntryModalOpen(true);
+                }}
             />
         </>
     );

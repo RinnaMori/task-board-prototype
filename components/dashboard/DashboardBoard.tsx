@@ -6,7 +6,6 @@ import {
   buildAssignmentMatrix,
   createInitialAssignmentHistory,
   formatNow,
-  getCompletedTasks,
   getInitials,
   getProjectColor,
   getRoleOrder,
@@ -15,12 +14,14 @@ import {
   isOverdue,
   useDashboardStore,
 } from "@/lib/dashboard-store";
+import { getSupabaseClient } from "@/lib/supabase/client";
 import {
   createEmptyMemberSchedule,
   loadScheduleStore,
   saveScheduleStore,
 } from "@/lib/schedule-utils";
 import type {
+  AssignmentHistoryItem,
   Member,
   MemberRole,
   NewTaskInput,
@@ -45,6 +46,30 @@ function getNextTaskId(members: Member[]) {
     .reduce((max, current) => Math.max(max, current), 0);
 
   return `T-${String(maxNumber + 1).padStart(3, "0")}`;
+}
+
+function getNextProjectCode(projects: { project_id: string }[]) {
+  const maxNumber = projects
+    .map((project) => Number(project.project_id.replace(/[^0-9]/g, "")) || 0)
+    .reduce((max, current) => Math.max(max, current), 0);
+
+  return `P-${String(maxNumber + 1).padStart(3, "0")}`;
+}
+
+async function getNextMemberCodeFromSupabase() {
+  const supabase = getSupabaseClient();
+
+  const { data, error } = await supabase.from("members").select("member_code");
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const maxNumber = (data ?? [])
+    .map((row) => Number(String(row.member_code ?? "").replace(/[^0-9]/g, "")) || 0)
+    .reduce((max, current) => Math.max(max, current), 0);
+
+  return `M-${String(maxNumber + 1).padStart(3, "0")}`;
 }
 
 function moveTaskBetweenMembers(
@@ -138,6 +163,50 @@ function insertMemberByRoleOrder(
   return [...members.slice(0, insertIndex), newMember, ...members.slice(insertIndex)];
 }
 
+function toHistoryInsertRows(taskDbId: string, history: AssignmentHistoryItem[]) {
+  return history.map((item) => ({
+    task_id: taskDbId,
+    from_member_name: item.from,
+    to_member_name: item.to,
+    assignment_role: item.role,
+    changed_at: item.changed_at,
+  }));
+}
+
+async function findLatestTaskRowIdByTaskCode(taskCode: string): Promise<{ id: string } | null> {
+  const supabase = getSupabaseClient();
+
+  const { data, error } = await supabase
+    .from("tasks")
+    .select("id")
+    .eq("task_code", taskCode)
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data && data.length > 0 ? { id: data[0].id as string } : null;
+}
+
+async function findMemberRowId(memberId: string, memberName: string): Promise<string | null> {
+  const supabase = getSupabaseClient();
+
+  const { data, error } = await supabase
+    .from("members")
+    .select("id")
+    .or(`member_code.eq.${memberId},member_name.eq.${memberName}`)
+    .order("display_order", { ascending: true })
+    .limit(1);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data && data.length > 0 ? (data[0].id as string) : null;
+}
+
 export function DashboardBoard() {
   const {
     members,
@@ -148,7 +217,6 @@ export function DashboardBoard() {
     statusSummary,
     setMembers,
     setProjects,
-    resetStore,
   } = useDashboardStore();
 
   const [mounted, setMounted] = useState(false);
@@ -234,34 +302,101 @@ export function DashboardBoard() {
     );
   }, [members]);
 
-  const handleDeleteTask = (taskId: string) => {
-    setMembers(
-      rawMembers.map((member) => ({
-        ...member,
-        tasks: member.tasks.filter((task) => task.task_id !== taskId),
-      })),
-    );
+  const handleDeleteTask = async (taskId: string) => {
+    try {
+      const existingTaskRow = await findLatestTaskRowIdByTaskCode(taskId);
+
+      if (!existingTaskRow) {
+        alert("削除失敗: 対象タスクが見つかりません");
+        return;
+      }
+
+      const supabase = getSupabaseClient();
+
+      const { error: historyDeleteError } = await supabase
+        .from("task_assignment_history")
+        .delete()
+        .eq("task_id", existingTaskRow.id);
+
+      if (historyDeleteError) {
+        console.error("❌ Supabase 履歴削除失敗", historyDeleteError);
+        alert(`削除失敗: ${historyDeleteError.message}`);
+        return;
+      }
+
+      const { error: taskDeleteError } = await supabase
+        .from("tasks")
+        .delete()
+        .eq("id", existingTaskRow.id);
+
+      if (taskDeleteError) {
+        console.error("❌ Supabase tasks 削除失敗", taskDeleteError);
+        alert(`削除失敗: ${taskDeleteError.message}`);
+        return;
+      }
+
+      setMembers(
+        rawMembers.map((member) => ({
+          ...member,
+          tasks: member.tasks.filter((task) => task.task_id !== taskId),
+        })),
+      );
+    } catch (error) {
+      console.error("❌ Supabaseエラー", error);
+      alert(error instanceof Error ? `削除失敗: ${error.message}` : "削除失敗");
+    }
   };
 
-  const handleCompleteTask = (taskId: string) => {
-    setMembers(
-      rawMembers.map((member) => ({
-        ...member,
-        tasks: member.tasks.map((task) =>
-          task.task_id === taskId
-            ? {
-              ...task,
-              status: "完了",
-              progress_pct: 100,
-              completed_at: formatNow(),
-            }
-            : task,
-        ),
-      })),
-    );
+  const handleCompleteTask = async (taskId: string) => {
+    const completedAt = formatNow();
+
+    try {
+      const existingTaskRow = await findLatestTaskRowIdByTaskCode(taskId);
+
+      if (!existingTaskRow) {
+        alert("完了保存失敗: 対象タスクが見つかりません");
+        return;
+      }
+
+      const supabase = getSupabaseClient();
+
+      const { error: taskUpdateError } = await supabase
+        .from("tasks")
+        .update({
+          status: "完了",
+          progress_pct: 100,
+          completed_at: completedAt,
+        })
+        .eq("id", existingTaskRow.id);
+
+      if (taskUpdateError) {
+        console.error("❌ Supabase tasks 完了更新失敗", taskUpdateError);
+        alert(`完了保存失敗: ${taskUpdateError.message}`);
+        return;
+      }
+
+      setMembers(
+        rawMembers.map((member) => ({
+          ...member,
+          tasks: member.tasks.map((task) =>
+            task.task_id === taskId
+              ? {
+                ...task,
+                status: "完了",
+                progress_pct: 100,
+                completed_at: completedAt,
+              }
+              : task,
+          ),
+        })),
+      );
+    } catch (error) {
+      console.error("❌ Supabaseエラー", error);
+      alert(error instanceof Error ? `完了保存失敗: ${error.message}` : "完了保存失敗");
+    }
   };
 
-  const handleDeleteMember = (memberId: string) => {
+  const handleDeleteMember = async (memberId: string) => {
     const targetMember = rawMembers.find((member) => member.member_id === memberId);
     if (!targetMember) return;
 
@@ -274,19 +409,93 @@ export function DashboardBoard() {
 
     if (!confirmed) return;
 
-    setMembers(rawMembers.filter((member) => member.member_id !== memberId));
+    try {
+      const supabase = getSupabaseClient();
 
-    const scheduleStore = loadScheduleStore();
-    saveScheduleStore({
-      members: scheduleStore.members.filter((member) => member.member_name !== targetMember.member_name),
-    });
+      const taskCodes = targetMember.tasks.map((task) => task.task_id);
+
+      if (taskCodes.length > 0) {
+        const { data: taskRows, error: taskRowsError } = await supabase
+          .from("tasks")
+          .select("id")
+          .in("task_code", taskCodes);
+
+        if (taskRowsError) {
+          console.error("❌ Supabase tasks 取得失敗", taskRowsError);
+          alert(`メンバー削除失敗: ${taskRowsError.message}`);
+          return;
+        }
+
+        const taskIds = (taskRows ?? []).map((row) => row.id as string);
+
+        if (taskIds.length > 0) {
+          const { error: historyDeleteError } = await supabase
+            .from("task_assignment_history")
+            .delete()
+            .in("task_id", taskIds);
+
+          if (historyDeleteError) {
+            console.error("❌ Supabase 履歴削除失敗", historyDeleteError);
+            alert(`メンバー削除失敗: ${historyDeleteError.message}`);
+            return;
+          }
+
+          const { error: taskDeleteError } = await supabase
+            .from("tasks")
+            .delete()
+            .in("id", taskIds);
+
+          if (taskDeleteError) {
+            console.error("❌ Supabase tasks 削除失敗", taskDeleteError);
+            alert(`メンバー削除失敗: ${taskDeleteError.message}`);
+            return;
+          }
+        }
+      }
+
+      const { error: scheduleDeleteError } = await supabase
+        .from("schedules")
+        .delete()
+        .eq("member_name", targetMember.member_name);
+
+      if (scheduleDeleteError) {
+        console.error("❌ Supabase schedules 削除失敗", scheduleDeleteError);
+        alert(`メンバー削除失敗: ${scheduleDeleteError.message}`);
+        return;
+      }
+
+      const memberRowId = await findMemberRowId(targetMember.member_id, targetMember.member_name);
+
+      if (memberRowId) {
+        const { error: memberUpdateError } = await supabase
+          .from("members")
+          .update({ is_active: false })
+          .eq("id", memberRowId);
+
+        if (memberUpdateError) {
+          console.error("❌ Supabase members 更新失敗", memberUpdateError);
+          alert(`メンバー削除失敗: ${memberUpdateError.message}`);
+          return;
+        }
+      }
+
+      setMembers(rawMembers.filter((member) => member.member_id !== memberId));
+
+      const scheduleStore = loadScheduleStore();
+      saveScheduleStore({
+        members: scheduleStore.members.filter((member) => member.member_name !== targetMember.member_name),
+      });
+    } catch (error) {
+      console.error("❌ Supabaseエラー", error);
+      alert(error instanceof Error ? `メンバー削除失敗: ${error.message}` : "メンバー削除失敗");
+    }
   };
 
   const handleEditTask = (task: Task) => {
     setEditingTask(task);
   };
 
-  const handleAddTask = (newTask: NewTaskInput) => {
+  const handleAddTask = async (newTask: NewTaskInput) => {
     const projectColor = getProjectColor(newTask.project_name, projects);
     const targetMemberName = getFallbackMemberName(rawMembers, newTask);
     if (!targetMemberName) return;
@@ -314,18 +523,69 @@ export function DashboardBoard() {
       assignment_history: createInitialAssignmentHistory(newTask),
     };
 
-    setMembers(
-      rawMembers.map((member) => {
-        if (member.member_name !== targetMemberName) return member;
-        return {
-          ...member,
-          tasks: [...member.tasks, nextTask],
-        };
-      }),
-    );
+    try {
+      const supabase = getSupabaseClient();
+
+      const { data: insertedTask, error: taskInsertError } = await supabase
+        .from("tasks")
+        .insert({
+          task_code: nextTask.task_id,
+          task_name: nextTask.task_name,
+          project_name: nextTask.project_name,
+          priority: nextTask.priority,
+          status: nextTask.status,
+          progress_pct: nextTask.progress_pct,
+          manager_name: nextTask.manager,
+          leader_name: nextTask.leader,
+          assignee_name: nextTask.assignee,
+          assigned_to: nextTask.assigned_to,
+          capacity_pct: nextTask.capacity_pct,
+          description: nextTask.description,
+          flow_from: nextTask.flow_from,
+          flow_to: nextTask.flow_to,
+          accent_color: nextTask.accentColor,
+          color: nextTask.color,
+          due_date: nextTask.due_date || null,
+          memo: nextTask.memo,
+          completed_at: null,
+        })
+        .select("id")
+        .single();
+
+      if (taskInsertError) {
+        console.error("❌ Supabase tasks 保存失敗", taskInsertError);
+        alert(`Supabase保存失敗: ${taskInsertError.message}`);
+        return;
+      }
+
+      if (insertedTask?.id && nextTask.assignment_history.length > 0) {
+        const { error: historyInsertError } = await supabase
+          .from("task_assignment_history")
+          .insert(toHistoryInsertRows(insertedTask.id, nextTask.assignment_history));
+
+        if (historyInsertError) {
+          console.error("❌ Supabase task_assignment_history 保存失敗", historyInsertError);
+          alert(`履歴保存失敗: ${historyInsertError.message}`);
+          return;
+        }
+      }
+
+      setMembers(
+        rawMembers.map((member) => {
+          if (member.member_name !== targetMemberName) return member;
+          return {
+            ...member,
+            tasks: [...member.tasks, nextTask],
+          };
+        }),
+      );
+    } catch (error) {
+      console.error("❌ Supabaseエラー", error);
+      alert(error instanceof Error ? `Supabaseエラー: ${error.message}` : "Supabaseエラー");
+    }
   };
 
-  const handleUpdateTask = (updatedTask: UpdateTaskInput) => {
+  const handleUpdateTask = async (updatedTask: UpdateTaskInput) => {
     const projectColor = getProjectColor(updatedTask.project_name, projects);
     const currentTask = rawMembers
       .flatMap((member) => member.tasks)
@@ -363,34 +623,98 @@ export function DashboardBoard() {
 
     const ownerChanged = currentOwnerName !== targetMemberName;
 
-    if (ownerChanged) {
-      setMembers(moveTaskBetweenMembers(rawMembers, updatedTask.task_id, targetMemberName, nextTask));
-    } else {
-      setMembers(
-        rawMembers.map((member) => ({
-          ...member,
-          tasks: member.tasks.map((task) =>
-            task.task_id === updatedTask.task_id
-              ? {
-                ...task,
-                ...nextTask,
-              }
-              : task,
-          ),
-        })),
-      );
-    }
+    try {
+      const existingTaskRow = await findLatestTaskRowIdByTaskCode(updatedTask.task_id);
 
-    setEditingTask(null);
+      if (!existingTaskRow) {
+        alert("Supabase更新失敗: 対象タスクが見つかりません");
+        return;
+      }
+
+      const supabase = getSupabaseClient();
+
+      const { error: taskUpdateError } = await supabase
+        .from("tasks")
+        .update({
+          task_name: updatedTask.task_name,
+          project_name: updatedTask.project_name,
+          priority: updatedTask.priority,
+          description: updatedTask.description,
+          due_date: updatedTask.due_date || null,
+          memo: updatedTask.memo,
+          status: updatedTask.status,
+          progress_pct: updatedTask.progress_pct,
+          manager_name: updatedTask.manager,
+          leader_name: updatedTask.leader,
+          assignee_name: updatedTask.assignee,
+          assigned_to: updatedTask.assignee,
+          capacity_pct: updatedTask.capacity_pct,
+          flow_from: updatedTask.leader || updatedTask.manager,
+          flow_to: updatedTask.assignee,
+          accent_color: projectColor.accentColor,
+          color: projectColor.color,
+          completed_at:
+            updatedTask.status === "完了" ? currentTask.completed_at ?? formatNow() : null,
+        })
+        .eq("id", existingTaskRow.id);
+
+      if (taskUpdateError) {
+        console.error("❌ Supabase tasks 更新失敗", taskUpdateError);
+        alert(`Supabase更新失敗: ${taskUpdateError.message}`);
+        return;
+      }
+
+      if (ownerChanged && currentOwnerName) {
+        const { error: historyInsertError } = await supabase
+          .from("task_assignment_history")
+          .insert({
+            task_id: existingTaskRow.id,
+            from_member_name: currentOwnerName,
+            to_member_name: targetMemberName,
+            assignment_role: "担当変更",
+            changed_at: formatNow(),
+          });
+
+        if (historyInsertError) {
+          console.error("❌ Supabase 履歴追加失敗", historyInsertError);
+          alert(`履歴保存失敗: ${historyInsertError.message}`);
+          return;
+        }
+      }
+
+      if (ownerChanged) {
+        setMembers(moveTaskBetweenMembers(rawMembers, updatedTask.task_id, targetMemberName, nextTask));
+      } else {
+        setMembers(
+          rawMembers.map((member) => ({
+            ...member,
+            tasks: member.tasks.map((task) =>
+              task.task_id === updatedTask.task_id
+                ? {
+                  ...task,
+                  ...nextTask,
+                }
+                : task,
+            ),
+          })),
+        );
+      }
+
+      setEditingTask(null);
+    } catch (error) {
+      console.error("❌ Supabaseエラー", error);
+      alert(error instanceof Error ? `Supabaseエラー: ${error.message}` : "Supabaseエラー");
+    }
   };
 
-  const handleAddMember = (input: {
+  const handleAddMember = async (input: {
     member_name: string;
     member_role: string;
     columnColor: string;
   }) => {
+    const memberCode = await getNextMemberCodeFromSupabase();
     const newMember: Member = {
-      member_id: crypto.randomUUID(),
+      member_id: memberCode,
       member_name: input.member_name,
       initials: getInitials(input.member_name),
       capacity_pct: 0,
@@ -400,37 +724,157 @@ export function DashboardBoard() {
       tasks: [],
     };
 
-    setMembers(insertMemberByRoleOrder(rawMembers, newMember, input.member_role as MemberRole));
+    try {
+      const supabase = getSupabaseClient();
 
-    const scheduleStore = loadScheduleStore();
-    const exists = scheduleStore.members.some((member) => member.member_name === input.member_name);
-    if (!exists) {
-      saveScheduleStore({
-        members: [...scheduleStore.members, createEmptyMemberSchedule(input.member_name)],
-      });
+      const displayOrder = rawMembers.length > 0 ? rawMembers.length + 1 : 1;
+
+      const { error } = await supabase
+        .from("members")
+        .insert({
+          member_code: memberCode,
+          member_name: input.member_name,
+          initials: getInitials(input.member_name),
+          role: input.member_role,
+          column_color: input.columnColor,
+          display_order: displayOrder,
+          is_active: true,
+        });
+
+      if (error) {
+        console.error("❌ Supabase members 保存失敗", error);
+        alert(`メンバー保存失敗: ${error.message}`);
+        return;
+      }
+
+      setMembers(insertMemberByRoleOrder(rawMembers, newMember, input.member_role as MemberRole));
+
+      const scheduleStore = loadScheduleStore();
+      const exists = scheduleStore.members.some((member) => member.member_name === input.member_name);
+      if (!exists) {
+        saveScheduleStore({
+          members: [...scheduleStore.members, createEmptyMemberSchedule(input.member_name)],
+        });
+      }
+    } catch (error) {
+      console.error("❌ Supabaseエラー", error);
+      alert(error instanceof Error ? `メンバー保存失敗: ${error.message}` : "メンバー保存失敗");
     }
   };
 
-  const handleAddProject = (input: {
+  const handleAddProject = async (input: {
     project_name: string;
     color: string;
     accentColor: string;
   }) => {
-    setProjects([
-      ...projects,
-      {
-        project_id: crypto.randomUUID(),
-        project_name: input.project_name,
-        color: input.color as TaskColor,
-        accentColor: input.accentColor,
-      },
-    ]);
+    const projectCode = getNextProjectCode(projects);
+
+    try {
+      const supabase = getSupabaseClient();
+
+      const { error } = await supabase
+        .from("projects")
+        .insert({
+          project_code: projectCode,
+          project_name: input.project_name,
+          color: input.color as TaskColor,
+          accent_color: input.accentColor,
+          is_active: true,
+        });
+
+      if (error) {
+        console.error("❌ Supabase projects 保存失敗", error);
+        alert(`プロジェクト保存失敗: ${error.message}`);
+        return;
+      }
+
+      setProjects([
+        ...projects,
+        {
+          project_id: projectCode,
+          project_name: input.project_name,
+          color: input.color as TaskColor,
+          accentColor: input.accentColor,
+        },
+      ]);
+    } catch (error) {
+      console.error("❌ Supabaseエラー", error);
+      alert(error instanceof Error ? `プロジェクト保存失敗: ${error.message}` : "プロジェクト保存失敗");
+    }
   };
 
-  const handleDropTaskToMember = (targetMemberName: string) => {
+  const handleDropTaskToMember = async (targetMemberName: string) => {
     if (!draggingTaskId) return;
-    setMembers(moveTaskBetweenMembers(rawMembers, draggingTaskId, targetMemberName));
-    setDraggingTaskId(null);
+
+    const sourceMember = rawMembers.find((member) =>
+      member.tasks.some((task) => task.task_id === draggingTaskId),
+    );
+    const currentTask = rawMembers
+      .flatMap((member) => member.tasks)
+      .find((task) => task.task_id === draggingTaskId);
+
+    if (!sourceMember || !currentTask) {
+      setDraggingTaskId(null);
+      return;
+    }
+
+    if (sourceMember.member_name === targetMemberName) {
+      setDraggingTaskId(null);
+      return;
+    }
+
+    try {
+      const existingTaskRow = await findLatestTaskRowIdByTaskCode(draggingTaskId);
+
+      if (!existingTaskRow) {
+        alert("担当変更失敗: 対象タスクが見つかりません");
+        setDraggingTaskId(null);
+        return;
+      }
+
+      const supabase = getSupabaseClient();
+
+      const { error: taskUpdateError } = await supabase
+        .from("tasks")
+        .update({
+          assignee_name: targetMemberName,
+          assigned_to: targetMemberName,
+          flow_from: sourceMember.member_name,
+          flow_to: targetMemberName,
+        })
+        .eq("id", existingTaskRow.id);
+
+      if (taskUpdateError) {
+        console.error("❌ Supabase tasks 担当変更失敗", taskUpdateError);
+        alert(`担当変更失敗: ${taskUpdateError.message}`);
+        setDraggingTaskId(null);
+        return;
+      }
+
+      const { error: historyInsertError } = await supabase
+        .from("task_assignment_history")
+        .insert({
+          task_id: existingTaskRow.id,
+          from_member_name: sourceMember.member_name,
+          to_member_name: targetMemberName,
+          assignment_role: "担当変更",
+          changed_at: formatNow(),
+        });
+
+      if (historyInsertError) {
+        console.error("❌ Supabase 履歴追加失敗", historyInsertError);
+        alert(`履歴保存失敗: ${historyInsertError.message}`);
+        setDraggingTaskId(null);
+        return;
+      }
+
+      setMembers(moveTaskBetweenMembers(rawMembers, draggingTaskId, targetMemberName));
+      setDraggingTaskId(null);
+    } catch (error) {
+      console.error("❌ Supabaseエラー", error);
+      alert(error instanceof Error ? `担当変更失敗: ${error.message}` : "担当変更失敗");
+      setDraggingTaskId(null);
+    }
   };
 
   if (!mounted) {
@@ -469,7 +913,6 @@ export function DashboardBoard() {
         onOpenTaskModal={() => setIsTaskModalOpen(true)}
         onOpenMemberModal={() => setIsMemberModalOpen(true)}
         onOpenProjectModal={() => setIsProjectModalOpen(true)}
-        onReset={resetStore}
       />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

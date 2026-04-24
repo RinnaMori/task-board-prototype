@@ -14,6 +14,10 @@ type ScheduleEntryModalProps = {
         work_style: WorkStyle;
         range: ScheduleRange;
     }) => void;
+    editingRange?: {
+        member_name: string;
+        range: ScheduleRange;
+    } | null;
 };
 
 export function ScheduleEntryModal({
@@ -21,6 +25,7 @@ export function ScheduleEntryModal({
     members,
     onClose,
     onSubmit,
+    editingRange = null,
 }: ScheduleEntryModalProps) {
     const [memberName, setMemberName] = useState("");
     const [startDate, setStartDate] = useState("");
@@ -31,6 +36,19 @@ export function ScheduleEntryModal({
 
     useEffect(() => {
         if (!isOpen) return;
+
+        if (editingRange) {
+            const target = members.find((member) => member.member_name === editingRange.member_name);
+
+            setMemberName(editingRange.member_name);
+            setStartDate(editingRange.range.start_date);
+            setEndDate(editingRange.range.end_date);
+            setType(editingRange.range.type);
+            setWeekdays(target?.weekdays ?? []);
+            setWorkStyle(target?.work_style ?? "どちらも可");
+            return;
+        }
+
         const first = members[0];
         if (!first) return;
 
@@ -40,9 +58,11 @@ export function ScheduleEntryModal({
         setStartDate("");
         setEndDate("");
         setType("available");
-    }, [isOpen, members]);
+    }, [isOpen, members, editingRange]);
 
     if (!isOpen) return null;
+
+    const isEditMode = Boolean(editingRange);
 
     const handleMemberChange = (nextMemberName: string) => {
         setMemberName(nextMemberName);
@@ -79,7 +99,7 @@ export function ScheduleEntryModal({
             weekdays: WEEKDAY_OPTIONS.filter((item) => weekdays.includes(item)),
             work_style: workStyle,
             range: {
-                id: crypto.randomUUID(),
+                id: editingRange?.range.id ?? crypto.randomUUID(),
                 start_date: startDate,
                 end_date: endDate,
                 type,
@@ -92,7 +112,9 @@ export function ScheduleEntryModal({
             <div className="w-full max-w-2xl rounded-[28px] bg-white p-6 shadow-2xl">
                 <div className="mb-6 flex items-start justify-between gap-4">
                     <div>
-                        <h2 className="text-2xl font-extrabold text-slate-900">スケジュール新規登録</h2>
+                        <h2 className="text-2xl font-extrabold text-slate-900">
+                            {isEditMode ? "スケジュール編集" : "スケジュール新規登録"}
+                        </h2>
                         <p className="mt-1 text-sm text-slate-500">
                             メンバー、期間、予定種別、曜日、勤務形態をまとめて登録できます。
                         </p>
@@ -207,7 +229,7 @@ export function ScheduleEntryModal({
                             type="submit"
                             className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white transition hover:bg-slate-700"
                         >
-                            登録する
+                            {isEditMode ? "更新する" : "登録する"}
                         </button>
                     </div>
                 </form>

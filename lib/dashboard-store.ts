@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { defaultStore } from "@/data/mock-data";
+import { fetchSupabaseDashboardStore } from "@/lib/supabase/dashboard-reader";
 import type {
     AssignmentHistoryItem,
     AssignmentMatrixRow,
@@ -265,16 +266,34 @@ export function useDashboardStore() {
     const [store, setStore] = useState<DashboardStore>(() => loadDashboardStore());
 
     useEffect(() => {
-        const sync = () => {
+        let active = true;
+
+        const syncFromStorage = () => {
             setStore(loadDashboardStore());
         };
 
-        window.addEventListener("storage", sync);
-        window.addEventListener(STORE_EVENT_NAME, sync as EventListener);
+        const syncFromSupabase = async () => {
+            try {
+                const remoteStore = await fetchSupabaseDashboardStore();
+                if (!active) return;
+
+                const normalized = normalizeStore(remoteStore);
+                setStore(normalized);
+                saveDashboardStore(normalized);
+            } catch (error) {
+                console.error("Supabase 読み込み失敗", error);
+            }
+        };
+
+        window.addEventListener("storage", syncFromStorage);
+        window.addEventListener(STORE_EVENT_NAME, syncFromStorage as EventListener);
+
+        syncFromSupabase();
 
         return () => {
-            window.removeEventListener("storage", sync);
-            window.removeEventListener(STORE_EVENT_NAME, sync as EventListener);
+            active = false;
+            window.removeEventListener("storage", syncFromStorage);
+            window.removeEventListener(STORE_EVENT_NAME, syncFromStorage as EventListener);
         };
     }, []);
 
@@ -311,9 +330,6 @@ export function useDashboardStore() {
                 ...store,
                 projects: projectsToSave,
             });
-        },
-        resetStore: () => {
-            updateStore(cloneDefaultStore());
         },
     };
 }

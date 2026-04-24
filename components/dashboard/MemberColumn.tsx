@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Member, Task } from "@/types/dashboard";
-import { getTodayStatus, loadScheduleStore } from "@/lib/schedule-utils";
 import { inferRoleFromName, sortTasksForDashboard } from "@/lib/dashboard-store";
-import type { ScheduleType } from "@/types/schedule";
+import { fetchSupabaseScheduleStore } from "@/lib/supabase/schedule-store";
+import type { MemberSchedule, ScheduleType } from "@/types/schedule";
 import { TaskCard } from "./TaskCard";
 
 type MemberColumnProps = {
@@ -47,7 +47,94 @@ function TodayStatusBadge({ status }: { status: ScheduleType | null }) {
     if (status === "unavailable") {
         return <span className="text-[10px] font-bold text-rose-600">❌</span>;
     }
+    return <span className="text-[10px] font-bold text-slate-400">-</span>;
+}
+
+function getStatusLabel(status: ScheduleType | null) {
+    if (status === "available") return "⭕ 稼働可能";
+    if (status === "unavailable") return "❌ 稼働不可";
+    return "未申告";
+}
+
+function getRangeTypeLabel(type: ScheduleType) {
+    return type === "available" ? "稼働可能" : "稼働不可";
+}
+
+function getTodayStatusFromMemberSchedule(schedule: MemberSchedule | null): ScheduleType | null {
+    if (!schedule) return null;
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    const unavailable = schedule.schedules.find(
+        (range) => range.type === "unavailable" && range.start_date <= today && today <= range.end_date,
+    );
+    if (unavailable) return "unavailable";
+
+    const available = schedule.schedules.find(
+        (range) => range.type === "available" && range.start_date <= today && today <= range.end_date,
+    );
+    if (available) return "available";
+
     return null;
+}
+
+function SchedulePopover({
+    schedule,
+    todayStatus,
+}: {
+    schedule: MemberSchedule | null;
+    todayStatus: ScheduleType | null;
+}) {
+    return (
+        <div className="absolute left-0 top-full z-30 mt-2 w-[320px] rounded-2xl border border-slate-200 bg-white p-4 shadow-xl">
+            <div className="mb-3">
+                <div className="text-xs font-bold text-slate-500">今日の状態</div>
+                <div className="mt-1 text-sm font-bold text-slate-900">{getStatusLabel(todayStatus)}</div>
+            </div>
+
+            <div className="mb-3 grid gap-3 sm:grid-cols-2">
+                <div>
+                    <div className="text-xs font-bold text-slate-500">勤務形態</div>
+                    <div className="mt-1 text-sm text-slate-900">
+                        {schedule?.work_style ?? "どちらも可"}
+                    </div>
+                </div>
+                <div>
+                    <div className="text-xs font-bold text-slate-500">稼働曜日</div>
+                    <div className="mt-1 text-sm text-slate-900">
+                        {schedule && schedule.weekdays.length > 0
+                            ? schedule.weekdays.join("・")
+                            : "未設定"}
+                    </div>
+                </div>
+            </div>
+
+            <div>
+                <div className="mb-2 text-xs font-bold text-slate-500">申告済みスケジュール</div>
+                {schedule && schedule.schedules.length > 0 ? (
+                    <div className="max-h-[220px] space-y-2 overflow-y-auto pr-1">
+                        {schedule.schedules.map((range, index) => (
+                            <div
+                                key={`${range.id ?? "noid"}-${range.type}-${range.start_date}-${range.end_date}-${index}`}
+                                className="rounded-xl bg-slate-50 px-3 py-2"
+                            >
+                                <div className="text-xs font-bold text-slate-700">
+                                    {getRangeTypeLabel(range.type)}
+                                </div>
+                                <div className="mt-1 text-xs text-slate-600">
+                                    {range.start_date} 〜 {range.end_date}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                ) : (
+                    <div className="rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-500">
+                        申告済みスケジュールはありません
+                    </div>
+                )}
+            </div>
+        </div>
+    );
 }
 
 export function MemberColumn({
@@ -67,25 +154,76 @@ export function MemberColumn({
     const roleBadge = roleBadgeMap[inferredRole] ?? "bg-slate-100 text-slate-700";
 
     const [todayStatus, setTodayStatus] = useState<ScheduleType | null>(null);
+    const [memberSchedule, setMemberSchedule] = useState<MemberSchedule | null>(null);
     const [isDragOver, setIsDragOver] = useState(false);
+    const [isScheduleOpen, setIsScheduleOpen] = useState(false);
+
+    const popoverRef = useRef<HTMLDivElement | null>(null);
 
     useEffect(() => {
-        const syncStatus = () => {
-            const store = loadScheduleStore();
-            setTodayStatus(getTodayStatus(member.member_name, store.members));
+        let active = true;
+
+        const syncStatus = async () => {
+            try {
+                const result = await fetchSupabaseScheduleStore([member.member_name]);
+                if (!active) return;
+
+                const found = result.members[0] ?? null;
+                setMemberSchedule(found);
+                setTodayStatus(getTodayStatusFromMemberSchedule(found));
+            } catch (error) {
+                console.error("❌ dashboard schedule取得失敗", error);
+                if (!active) return;
+                setMemberSchedule(null);
+                setTodayStatus(null);
+            }
         };
 
-        syncStatus();
-        window.addEventListener("storage", syncStatus);
-        window.addEventListener("schedule-store-updated", syncStatus as EventListener);
+        const handleScheduleUpdated = () => {
+            void syncStatus();
+        };
+
+        const handleFocus = () => {
+            void syncStatus();
+        };
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === "visible") {
+                void syncStatus();
+            }
+        };
+
+        void syncStatus();
+        window.addEventListener("schedule-store-updated", handleScheduleUpdated);
+        window.addEventListener("focus", handleFocus);
+        document.addEventListener("visibilitychange", handleVisibilityChange);
 
         return () => {
-            window.removeEventListener("storage", syncStatus);
-            window.removeEventListener("schedule-store-updated", syncStatus as EventListener);
+            active = false;
+            window.removeEventListener("schedule-store-updated", handleScheduleUpdated);
+            window.removeEventListener("focus", handleFocus);
+            document.removeEventListener("visibilitychange", handleVisibilityChange);
         };
     }, [member.member_name]);
 
-    const sortedTasks = sortTasksForDashboard(member.tasks);
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (!popoverRef.current) return;
+            if (!popoverRef.current.contains(event.target as Node)) {
+                setIsScheduleOpen(false);
+            }
+        };
+
+        if (isScheduleOpen) {
+            document.addEventListener("mousedown", handleClickOutside);
+        }
+
+        return () => {
+            document.removeEventListener("mousedown", handleClickOutside);
+        };
+    }, [isScheduleOpen]);
+
+    const sortedTasks = useMemo(() => sortTasksForDashboard(member.tasks), [member.tasks]);
 
     const raw = Math.max(0, totalCapacityPct);
     const percent = Math.min(raw, 100);
@@ -109,21 +247,33 @@ export function MemberColumn({
                 } ${member.columnColor}`}
         >
             <div className="mb-3 flex items-center justify-between gap-3">
-                <div className="min-w-0 flex items-center gap-2">
-                    <div
-                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${avatarColor}`}
+                <div className="relative min-w-0 flex-1" ref={popoverRef}>
+                    <button
+                        type="button"
+                        onClick={() => setIsScheduleOpen((prev) => !prev)}
+                        className="flex min-w-0 items-center gap-2 rounded-xl px-1 py-1 text-left transition hover:bg-white/70"
                     >
-                        {member.initials}
-                    </div>
-                    <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                            <span className="truncate text-sm font-bold text-slate-900">{member.member_name}</span>
-                            <span className={`rounded-full px-2 py-0.5 text-[10px] ${roleBadge}`}>
-                                {inferredRole}
-                            </span>
-                            <TodayStatusBadge status={todayStatus} />
+                        <div
+                            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${avatarColor}`}
+                        >
+                            {member.initials}
                         </div>
-                    </div>
+                        <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <span className="truncate text-sm font-bold text-slate-900">
+                                    {member.member_name}
+                                </span>
+                                <span className={`rounded-full px-2 py-0.5 text-[10px] ${roleBadge}`}>
+                                    {inferredRole}
+                                </span>
+                                <TodayStatusBadge status={todayStatus} />
+                            </div>
+                        </div>
+                    </button>
+
+                    {isScheduleOpen ? (
+                        <SchedulePopover schedule={memberSchedule} todayStatus={todayStatus} />
+                    ) : null}
                 </div>
 
                 <button

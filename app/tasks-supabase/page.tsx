@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { AppShell } from "@/components/dashboard/AppShell";
 import { PriorityBadge, StatusBadge } from "@/components/dashboard/StatusBadge";
 import {
@@ -15,7 +16,7 @@ import type { DashboardStore } from "@/types/dashboard";
 
 type LoadState = "loading" | "ready" | "error";
 
-export default function TasksPage() {
+export default function TasksSupabasePage() {
     const [state, setState] = useState<LoadState>("loading");
     const [errorMessage, setErrorMessage] = useState("");
     const [store, setStore] = useState<DashboardStore>({ members: [], projects: [] });
@@ -49,16 +50,24 @@ export default function TasksPage() {
 
     return (
         <AppShell
-            title="タスク一覧"
-            description="完了済みタスクは下部の完了済みエリアに永続表示されます。"
+            title="Supabase タスク一覧確認ページ"
+            description="既存の localStorage 版は触らず、Supabase から読んだタスク一覧だけを別ページで確認します。"
             actions={
-                <button
-                    type="button"
-                    onClick={() => window.location.reload()}
-                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                    再読み込み
-                </button>
+                <div className="flex flex-wrap gap-2">
+                    <Link
+                        href="/tasks"
+                        className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                    >
+                        既存タスク一覧へ戻る
+                    </Link>
+                    <button
+                        type="button"
+                        onClick={() => window.location.reload()}
+                        className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                    >
+                        再読み込み
+                    </button>
+                </div>
             }
         >
             {state === "loading" ? (
@@ -78,16 +87,21 @@ export default function TasksPage() {
                     <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
                         <div className="border-b border-slate-200 px-5 py-4">
                             <h2 className="text-xl font-extrabold text-slate-900">現在のタスク</h2>
+                            <p className="mt-1 text-sm text-slate-500">
+                                Supabase から読み込んだ未完了タスク一覧です。
+                            </p>
                         </div>
                         <div className="overflow-x-auto">
                             <table className="min-w-full border-collapse text-sm">
                                 <thead className="bg-slate-50 text-left text-slate-700">
                                     <tr>
-                                        {["ID", "タスク名", "優先度", "状態", "期日", "Manager", "Leader", "担当者"].map((label) => (
-                                            <th key={label} className="border-b border-slate-200 px-4 py-3 font-bold">
-                                                {label}
-                                            </th>
-                                        ))}
+                                        {["ID", "タスク名", "優先度", "状態", "期日", "Manager", "Leader", "担当者"].map(
+                                            (label) => (
+                                                <th key={label} className="border-b border-slate-200 px-4 py-3 font-bold">
+                                                    {label}
+                                                </th>
+                                            ),
+                                        )}
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -126,7 +140,9 @@ export default function TasksPage() {
                     <section className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
                         <div className="border-b border-slate-200 px-5 py-4">
                             <h2 className="text-xl font-extrabold text-slate-900">完了済みエリア</h2>
-                            <p className="mt-1 text-sm text-slate-500">完了済みは時間に関係なくここへ残ります。</p>
+                            <p className="mt-1 text-sm text-slate-500">
+                                Supabase から読み込んだ完了済みタスク一覧です。
+                            </p>
                         </div>
                         <div className="overflow-x-auto">
                             <table className="min-w-full border-collapse text-sm">
