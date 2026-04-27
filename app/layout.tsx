@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { ToastProvider } from "@/components/ui/ToastProvider";
 
 export const metadata: Metadata = {
   title: "人材・タスク管理ダッシュボード",
@@ -13,7 +14,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ja">
-      <body>{children}</body>
+      <body>
+        <ToastProvider>{children}</ToastProvider>
+      </body>
     </html>
   );
 }

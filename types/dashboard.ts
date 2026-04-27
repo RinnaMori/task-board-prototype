@@ -17,13 +17,17 @@ export type TaskColor =
     | "amber"
     | "rose";
 
-export type MemberRole = "マネージャー" | "リーダー" | "正社員" | "業務委託";
+export type MemberRole = "Lead" | "正社員" | "業務委託";
 
 export type AssignmentRole =
+    | "Lead→担当者"
     | "Manager→Leader"
     | "Leader→担当者"
     | "担当変更"
-    | "直接差配";
+    | "担当者追加"
+    | "担当者解除"
+    | "直接差配"
+    | "初期担当";
 
 export type AssignmentHistoryItem = {
     from: string;
@@ -43,6 +47,7 @@ export type Task = {
     leader: string;
     assignee: string;
     capacity_pct: number;
+    capacity_by_assignee?: Record<string, number>;
     assigned_to: string;
     description: string;
     flow_from: string;
@@ -52,12 +57,14 @@ export type Task = {
     due_date: string;
     memo: string;
     completed_at?: string | null;
+    updated_at?: string | null;
     assignment_history: AssignmentHistoryItem[];
 };
 
 export type Member = {
     member_id: string;
     member_name: string;
+    role: MemberRole;
     initials: string;
     capacity_pct: number;
     capacity_label: string;
@@ -82,6 +89,7 @@ export type NewTaskInput = {
     leader: string;
     assignee: string;
     capacity_pct: number;
+    capacity_by_assignee: Record<string, number>;
     due_date: string;
     memo: string;
 };
@@ -100,6 +108,7 @@ export type UpdateTaskInput = {
     leader: string;
     assignee: string;
     capacity_pct: number;
+    capacity_by_assignee: Record<string, number>;
 };
 
 export type DashboardStore = {
@@ -109,6 +118,7 @@ export type DashboardStore = {
 
 export type MemberStatusSummary = {
     member_name: string;
+    role: MemberRole;
     未着手: number;
     進行中: number;
     完了: number;

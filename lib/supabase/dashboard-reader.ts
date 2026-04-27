@@ -1,8 +1,10 @@
 import { getSupabaseClient } from "@/lib/supabase/client";
+import { getAssigneeNames, normalizeAssigneeCapacities, taskHasAssignee } from "@/lib/dashboard-assignees";
 import type {
     AssignmentHistoryItem,
     DashboardStore,
     Member,
+    MemberRole,
     Project,
     Task,
     TaskColor,
@@ -15,6 +17,7 @@ type MemberRow = {
     member_code: string | null;
     member_name: string;
     initials: string | null;
+    role: string | null;
     column_color: string | null;
     display_order: number | null;
     is_active: boolean | null;
@@ -43,6 +46,7 @@ type TaskRow = {
     assignee_name: string;
     assigned_to: string;
     capacity_pct: number;
+    capacity_by_assignee: Record<string, number> | null;
     description: string;
     flow_from: string;
     flow_to: string;
@@ -51,6 +55,7 @@ type TaskRow = {
     due_date: string | null;
     memo: string;
     completed_at: string | null;
+    updated_at: string | null;
 };
 
 type AssignmentHistoryRow = {
@@ -65,6 +70,18 @@ function getInitials(name: string) {
     const trimmed = name.trim();
     if (!trimmed) return "新";
     return trimmed.slice(0, 1);
+}
+
+function normalizeMemberRole(role: string | null): MemberRole {
+    if (role === "Lead" || role === "リード" || role === "マネージャー" || role === "リーダー") {
+        return "Lead";
+    }
+
+    if (role === "正社員") {
+        return "正社員";
+    }
+
+    return "業務委託";
 }
 
 function buildAssignmentHistoryMap(rows: AssignmentHistoryRow[]) {
@@ -94,35 +111,46 @@ function mapProjects(rows: ProjectRow[]): Project[] {
 }
 
 function mapTasks(rows: TaskRow[], historyMap: Map<string, AssignmentHistoryItem[]>): Task[] {
-    return rows.map((row) => ({
-        task_id: row.task_code,
-        task_name: row.task_name,
-        project_name: row.project_name,
-        priority: row.priority,
-        status: row.status,
-        progress_pct: row.progress_pct,
-        manager: row.manager_name,
-        leader: row.leader_name,
-        assignee: row.assignee_name,
-        capacity_pct: row.capacity_pct,
-        assigned_to: row.assigned_to,
-        description: row.description,
-        flow_from: row.flow_from,
-        flow_to: row.flow_to,
-        accentColor: row.accent_color,
-        color: row.color,
-        due_date: row.due_date ?? "",
-        memo: row.memo,
-        completed_at: row.completed_at,
-        assignment_history: historyMap.get(row.id) ?? [],
-    }));
+    return rows.map((row) => {
+        const assigneeNames = getAssigneeNames(row.assigned_to || row.assignee_name);
+        const capacityByAssignee = normalizeAssigneeCapacities(
+            assigneeNames,
+            row.capacity_by_assignee,
+            row.capacity_pct,
+        );
+
+        const leadName = row.leader_name || row.manager_name || "";
+
+        return {
+            task_id: row.task_code,
+            task_name: row.task_name,
+            project_name: row.project_name,
+            priority: row.priority,
+            status: row.status,
+            progress_pct: row.progress_pct,
+            manager: leadName,
+            leader: leadName,
+            assignee: row.assignee_name,
+            capacity_pct: row.capacity_pct,
+            capacity_by_assignee: capacityByAssignee,
+            assigned_to: row.assigned_to,
+            description: row.description,
+            flow_from: row.flow_from,
+            flow_to: row.flow_to,
+            accentColor: row.accent_color,
+            color: row.color,
+            due_date: row.due_date ?? "",
+            memo: row.memo,
+            completed_at: row.completed_at,
+            updated_at: row.updated_at,
+            assignment_history: historyMap.get(row.id) ?? [],
+        };
+    });
 }
 
 function attachTasksToMembers(memberRows: MemberRow[], tasks: Task[]): Member[] {
     return memberRows.map((row) => {
-        const memberTasks = tasks.filter(
-            (task) => task.assigned_to === row.member_name || task.assignee === row.member_name,
-        );
+        const memberTasks = tasks.filter((task) => taskHasAssignee(task, row.member_name));
 
         const dueTodayCount = memberTasks.filter((task) => {
             if (task.status === "完了" || !task.due_date) return false;
@@ -132,6 +160,7 @@ function attachTasksToMembers(memberRows: MemberRow[], tasks: Task[]): Member[] 
         return {
             member_id: row.member_code || row.id,
             member_name: row.member_name,
+            role: normalizeMemberRole(row.role),
             initials: row.initials || getInitials(row.member_name),
             capacity_pct: dueTodayCount,
             capacity_label: `${dueTodayCount} 件`,
@@ -148,7 +177,7 @@ export async function fetchSupabaseDashboardStore(): Promise<DashboardStore> {
     const [membersResult, projectsResult, tasksResult, historyResult] = await Promise.all([
         supabase
             .from("members")
-            .select("id, member_code, member_name, initials, column_color, display_order, is_active")
+            .select("id, member_code, member_name, initials, role, column_color, display_order, is_active")
             .eq("is_active", true)
             .order("display_order", { ascending: true }),
         supabase
@@ -159,7 +188,7 @@ export async function fetchSupabaseDashboardStore(): Promise<DashboardStore> {
         supabase
             .from("tasks")
             .select(
-                "id, task_code, task_name, project_name, priority, status, progress_pct, manager_name, leader_name, assignee_name, assigned_to, capacity_pct, description, flow_from, flow_to, accent_color, color, due_date, memo, completed_at",
+                "id, task_code, task_name, project_name, priority, status, progress_pct, manager_name, leader_name, assignee_name, assigned_to, capacity_pct, capacity_by_assignee, description, flow_from, flow_to, accent_color, color, due_date, memo, completed_at, updated_at",
             )
             .order("created_at", { ascending: true }),
         supabase

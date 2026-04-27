@@ -58,11 +58,13 @@ export async function fetchSupabaseScheduleStore(memberNames: string[]): Promise
 
     const members: MemberSchedule[] = memberNames.map((memberName) => {
         const memberRows = rowMap.get(memberName) ?? [];
+
         if (memberRows.length === 0) {
             return createEmptyMemberSchedule(memberName);
         }
 
         const firstRow = memberRows[0];
+
         const schedules: ScheduleRange[] = sortScheduleRanges(
             memberRows.map((row) => ({
                 id: row.id,
@@ -135,6 +137,16 @@ export async function updateSupabaseScheduleEntry(input: {
             work_style: input.work_style,
         })
         .eq("id", input.range.id);
+
+    if (error) {
+        throw new Error(error.message);
+    }
+}
+
+export async function deleteSupabaseScheduleEntry(scheduleId: string) {
+    const supabase = getSupabaseClient();
+
+    const { error } = await supabase.from("schedules").delete().eq("id", scheduleId);
 
     if (error) {
         throw new Error(error.message);

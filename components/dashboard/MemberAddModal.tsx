@@ -1,8 +1,7 @@
 "use client";
 
 import { useState } from "react";
-
-type MemberRoleLike = "マネージャー" | "リーダー" | "正社員" | "業務委託";
+import type { MemberRole } from "@/types/dashboard";
 
 type MemberAddModalProps = {
     isOpen: boolean;
@@ -14,7 +13,7 @@ type MemberAddModalProps = {
     }) => void;
 };
 
-const MEMBER_ROLE_OPTIONS: MemberRoleLike[] = ["マネージャー", "リーダー", "正社員", "業務委託"];
+const MEMBER_ROLE_OPTIONS: MemberRole[] = ["Lead", "正社員", "業務委託"];
 
 const MEMBER_COLUMN_COLOR_OPTIONS = [
     { label: "青", value: "border-sky-400" },
@@ -31,7 +30,7 @@ const MEMBER_COLUMN_COLOR_OPTIONS = [
 
 export function MemberAddModal({ isOpen, onClose, onSubmit }: MemberAddModalProps) {
     const [memberName, setMemberName] = useState("");
-    const [memberRole, setMemberRole] = useState<MemberRoleLike>("業務委託");
+    const [memberRole, setMemberRole] = useState<MemberRole>("業務委託");
     const [columnColor, setColumnColor] = useState("border-sky-400");
 
     if (!isOpen) return null;
@@ -83,7 +82,7 @@ export function MemberAddModal({ isOpen, onClose, onSubmit }: MemberAddModalProp
                             value={memberName}
                             onChange={(event) => setMemberName(event.target.value)}
                             className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
-                            placeholder="例: 正社員 佐藤"
+                            placeholder="例: 田中 太郎"
                             maxLength={30}
                         />
                     </label>
@@ -92,7 +91,7 @@ export function MemberAddModal({ isOpen, onClose, onSubmit }: MemberAddModalProp
                         <span className="mb-2 block text-sm font-bold text-slate-700">役職</span>
                         <select
                             value={memberRole}
-                            onChange={(event) => setMemberRole(event.target.value as MemberRoleLike)}
+                            onChange={(event) => setMemberRole(event.target.value as MemberRole)}
                             className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
                         >
                             {MEMBER_ROLE_OPTIONS.map((role) => (

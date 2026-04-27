@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Member, Task } from "@/types/dashboard";
-import { inferRoleFromName, sortTasksForDashboard } from "@/lib/dashboard-store";
+import { sortTasksForDashboard } from "@/lib/dashboard-store";
 import { fetchSupabaseScheduleStore } from "@/lib/supabase/schedule-store";
 import type { MemberSchedule, ScheduleType } from "@/types/schedule";
 import { TaskCard } from "./TaskCard";
@@ -16,7 +16,7 @@ type MemberColumnProps = {
     onDeleteMember: (memberId: string) => void;
     onDropTask: (targetMemberName: string) => void;
     draggingTaskId: string | null;
-    onDragStartTask: (taskId: string) => void;
+    onDragStartTask: (taskId: string, sourceMemberName: string) => void;
     onDragEndTask: () => void;
 };
 
@@ -34,8 +34,7 @@ const avatarColorMap: Record<string, string> = {
 };
 
 const roleBadgeMap: Record<string, string> = {
-    マネージャー: "bg-sky-100 text-sky-700",
-    リーダー: "bg-emerald-100 text-emerald-700",
+    Lead: "bg-sky-100 text-sky-700",
     正社員: "bg-amber-100 text-amber-700",
     業務委託: "bg-purple-100 text-purple-700",
 };
@@ -150,8 +149,8 @@ export function MemberColumn({
     onDragEndTask,
 }: MemberColumnProps) {
     const avatarColor = avatarColorMap[member.columnColor] ?? "bg-slate-100 text-slate-700";
-    const inferredRole = inferRoleFromName(member.member_name);
-    const roleBadge = roleBadgeMap[inferredRole] ?? "bg-slate-100 text-slate-700";
+    const role = member.role;
+    const roleBadge = roleBadgeMap[role] ?? "bg-slate-100 text-slate-700";
 
     const [todayStatus, setTodayStatus] = useState<ScheduleType | null>(null);
     const [memberSchedule, setMemberSchedule] = useState<MemberSchedule | null>(null);
@@ -264,7 +263,7 @@ export function MemberColumn({
                                     {member.member_name}
                                 </span>
                                 <span className={`rounded-full px-2 py-0.5 text-[10px] ${roleBadge}`}>
-                                    {inferredRole}
+                                    {role}
                                 </span>
                                 <TodayStatusBadge status={todayStatus} />
                             </div>
@@ -305,11 +304,12 @@ export function MemberColumn({
                         <TaskCard
                             key={task.task_id}
                             task={task}
+                            currentMemberName={member.member_name}
                             onEdit={onEditTask}
                             onDelete={onDeleteTask}
                             onComplete={onCompleteTask}
                             isDragging={draggingTaskId === task.task_id}
-                            onDragStart={() => onDragStartTask(task.task_id)}
+                            onDragStart={() => onDragStartTask(task.task_id, member.member_name)}
                             onDragEnd={onDragEndTask}
                         />
                     ))

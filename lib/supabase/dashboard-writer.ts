@@ -1,4 +1,5 @@
 import { getSupabaseClient } from "@/lib/supabase/client";
+import { getAssigneeNames, getPrimaryCapacityPct, joinAssigneeNames, moveAssigneeCapacity, normalizeAssigneeCapacities, replaceAssigneeName } from "@/lib/dashboard-assignees";
 import type { AssignmentHistoryItem, TaskColor, TaskPriority, TaskStatus } from "@/types/dashboard";
 
 type TaskInsertInput = {
@@ -13,6 +14,7 @@ type TaskInsertInput = {
     assignee_name: string;
     assigned_to: string;
     capacity_pct: number;
+    capacity_by_assignee: Record<string, number>;
     description: string;
     flow_from: string;
     flow_to: string;
@@ -24,6 +26,10 @@ type TaskInsertInput = {
 };
 
 type TaskUpdateInput = Partial<Omit<TaskInsertInput, "task_code">>;
+
+type TaskUpdateOptions = {
+    expectedUpdatedAt?: string | null;
+};
 
 type MemberInsertInput = {
     member_code: string;
@@ -59,12 +65,12 @@ export async function getNextMemberCodeFromSupabase() {
     return `M-${String(maxNumber + 1).padStart(3, "0")}`;
 }
 
-export async function findLatestTaskRowIdByTaskCode(taskCode: string): Promise<{ id: string } | null> {
+export async function findLatestTaskRowIdByTaskCode(taskCode: string): Promise<{ id: string; updated_at: string | null } | null> {
     const supabase = getSupabaseClient();
 
     const { data, error } = await supabase
         .from("tasks")
-        .select("id")
+        .select("id, updated_at")
         .eq("task_code", taskCode)
         .order("created_at", { ascending: false })
         .limit(1);
@@ -73,7 +79,7 @@ export async function findLatestTaskRowIdByTaskCode(taskCode: string): Promise<{
         throw new Error(error.message);
     }
 
-    return data && data.length > 0 ? { id: data[0].id as string } : null;
+    return data && data.length > 0 ? { id: data[0].id as string, updated_at: data[0].updated_at as string | null } : null;
 }
 
 export async function findMemberRowId(memberId: string, memberName: string): Promise<string | null> {
@@ -109,14 +115,14 @@ export async function insertDashboardTask(input: TaskInsertInput) {
     const { data, error } = await supabase
         .from("tasks")
         .insert(input)
-        .select("id")
+        .select("id, updated_at")
         .single();
 
     if (error) {
         throw new Error(error.message);
     }
 
-    return data as { id: string };
+    return data as { id: string; updated_at: string | null };
 }
 
 export async function insertTaskAssignmentHistory(taskDbId: string, history: AssignmentHistoryItem[]) {
@@ -133,7 +139,11 @@ export async function insertTaskAssignmentHistory(taskDbId: string, history: Ass
     }
 }
 
-export async function updateDashboardTaskByCode(taskCode: string, updates: TaskUpdateInput) {
+export async function updateDashboardTaskByCode(
+    taskCode: string,
+    updates: TaskUpdateInput,
+    options: TaskUpdateOptions = {},
+) {
     const taskRow = await findLatestTaskRowIdByTaskCode(taskCode);
 
     if (!taskRow) {
@@ -142,21 +152,52 @@ export async function updateDashboardTaskByCode(taskCode: string, updates: TaskU
 
     const supabase = getSupabaseClient();
 
-    const { error } = await supabase.from("tasks").update(updates).eq("id", taskRow.id);
+    if (options.expectedUpdatedAt) {
+        const { data: currentTask, error: currentTaskError } = await supabase
+            .from("tasks")
+            .select("updated_at")
+            .eq("id", taskRow.id)
+            .single();
+
+        if (currentTaskError) {
+            throw new Error(currentTaskError.message);
+        }
+
+        if (currentTask?.updated_at && currentTask.updated_at !== options.expectedUpdatedAt) {
+            throw new Error(
+                "他のユーザーが先にこのタスクを更新しました。画面を更新してからもう一度操作してください。",
+            );
+        }
+    }
+
+    const { data, error } = await supabase
+        .from("tasks")
+        .update(updates)
+        .eq("id", taskRow.id)
+        .select("id, updated_at")
+        .single();
 
     if (error) {
         throw new Error(error.message);
     }
 
-    return taskRow;
+    return data as { id: string; updated_at: string | null };
 }
 
-export async function completeDashboardTask(taskCode: string, completedAt: string) {
-    return updateDashboardTaskByCode(taskCode, {
-        status: "完了",
-        progress_pct: 100,
-        completed_at: completedAt,
-    });
+export async function completeDashboardTask(
+    taskCode: string,
+    completedAt: string,
+    options: TaskUpdateOptions = {},
+) {
+    return updateDashboardTaskByCode(
+        taskCode,
+        {
+            status: "完了",
+            progress_pct: 100,
+            completed_at: completedAt,
+        },
+        options,
+    );
 }
 
 export async function deleteDashboardTask(taskCode: string) {
@@ -211,13 +252,60 @@ export async function updateDashboardTaskAssignee(input: {
     sourceMemberName: string;
     targetMemberName: string;
     changedAt: string;
+    expectedUpdatedAt?: string | null;
 }) {
-    const taskRow = await updateDashboardTaskByCode(input.taskCode, {
-        assignee_name: input.targetMemberName,
-        assigned_to: input.targetMemberName,
-        flow_from: input.sourceMemberName,
-        flow_to: input.targetMemberName,
-    });
+    const supabase = getSupabaseClient();
+
+    const latest = await findLatestTaskRowIdByTaskCode(input.taskCode);
+
+    if (!latest) {
+        throw new Error("対象タスクが見つかりません");
+    }
+
+    if (input.expectedUpdatedAt && latest.updated_at && latest.updated_at !== input.expectedUpdatedAt) {
+        throw new Error("他のユーザーが先にこのタスクを更新しました。画面を再読み込みしてから再度お試しください。");
+    }
+
+    const { data: currentTask, error: currentTaskError } = await supabase
+        .from("tasks")
+        .select("assignee_name, assigned_to, capacity_pct, capacity_by_assignee")
+        .eq("id", latest.id)
+        .single();
+
+    if (currentTaskError) {
+        throw new Error(currentTaskError.message);
+    }
+
+    const currentNames = getAssigneeNames(
+        String(currentTask?.assigned_to || currentTask?.assignee_name || ""),
+    );
+
+    if (!currentNames.includes(input.sourceMemberName) && currentNames.includes(input.targetMemberName)) {
+        return;
+    }
+
+    const nextNames = replaceAssigneeName(currentNames, input.sourceMemberName, input.targetMemberName);
+    const nextAssignedTo = joinAssigneeNames(nextNames);
+    const movedCapacities = moveAssigneeCapacity(
+        (currentTask?.capacity_by_assignee as Record<string, number> | null) ?? null,
+        input.sourceMemberName,
+        input.targetMemberName,
+        Number(currentTask?.capacity_pct ?? 0),
+    );
+    const nextCapacityByAssignee = normalizeAssigneeCapacities(nextNames, movedCapacities, Number(currentTask?.capacity_pct ?? 0));
+
+    const taskRow = await updateDashboardTaskByCode(
+        input.taskCode,
+        {
+            assignee_name: nextAssignedTo,
+            assigned_to: nextAssignedTo,
+            capacity_pct: getPrimaryCapacityPct(nextNames, nextCapacityByAssignee),
+            capacity_by_assignee: nextCapacityByAssignee,
+            flow_from: input.sourceMemberName,
+            flow_to: input.targetMemberName,
+        },
+        { expectedUpdatedAt: input.expectedUpdatedAt },
+    );
 
     await insertSingleTaskAssignmentHistory({
         taskDbId: taskRow.id,
@@ -296,6 +384,59 @@ export async function deleteTasksAndHistoriesByTaskCodes(taskCodes: string[]) {
 
     if (taskDeleteError) {
         throw new Error(taskDeleteError.message);
+    }
+}
+
+
+export async function removeMemberFromDashboardTaskAssignees(memberName: string) {
+    const supabase = getSupabaseClient();
+
+    const { data: taskRows, error } = await supabase
+        .from("tasks")
+        .select("id, assignee_name, assigned_to, capacity_pct, capacity_by_assignee")
+        .or(`assignee_name.ilike.%${memberName}%,assigned_to.ilike.%${memberName}%`);
+
+    if (error) {
+        throw new Error(error.message);
+    }
+
+    const updates = (taskRows ?? [])
+        .map((row) => {
+            const currentNames = getAssigneeNames(
+                String(row.assigned_to || row.assignee_name || ""),
+            );
+            const nextNames = currentNames.filter((name) => name !== memberName);
+
+            const nextCapacityByAssignee = normalizeAssigneeCapacities(
+                nextNames,
+                row.capacity_by_assignee as Record<string, number> | null,
+                Number(row.capacity_pct ?? 0),
+            );
+
+            return {
+                id: row.id as string,
+                nextNames,
+                nextAssignedTo: joinAssigneeNames(nextNames),
+                nextCapacityByAssignee,
+                shouldUpdate: currentNames.length > 1 && nextNames.length > 0,
+            };
+        })
+        .filter((row) => row.shouldUpdate);
+
+    for (const row of updates) {
+        const { error: updateError } = await supabase
+            .from("tasks")
+            .update({
+                assignee_name: row.nextAssignedTo,
+                assigned_to: row.nextAssignedTo,
+                capacity_pct: getPrimaryCapacityPct(row.nextNames, row.nextCapacityByAssignee),
+                capacity_by_assignee: row.nextCapacityByAssignee,
+            })
+            .eq("id", row.id);
+
+        if (updateError) {
+            throw new Error(updateError.message);
+        }
     }
 }
 

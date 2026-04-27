@@ -1,7 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useToast } from "@/components/ui/useToast";
+import {
+  getAssigneeNames,
+  getCapacityForMember,
+  getPrimaryAssigneeName,
+  getPrimaryCapacityPct,
+  joinAssigneeNames,
+  moveAssigneeCapacity,
+  normalizeAssigneeCapacities,
+  replaceAssigneeName,
+} from "@/lib/dashboard-assignees";
 import {
   buildAssignmentMatrix,
   createInitialAssignmentHistory,
@@ -10,7 +21,6 @@ import {
   getProjectColor,
   getRoleOrder,
   getDashboardVisibleTasks,
-  inferRoleFromName,
   isOverdue,
   useDashboardStore,
 } from "@/lib/dashboard-store";
@@ -26,9 +36,11 @@ import {
   insertDashboardTask,
   insertSingleTaskAssignmentHistory,
   insertTaskAssignmentHistory,
+  removeMemberFromDashboardTaskAssignees,
   updateDashboardTaskAssignee,
   updateDashboardTaskByCode,
 } from "@/lib/supabase/dashboard-writer";
+import { subscribeToTasks } from "@/lib/supabase/realtime-listener";
 import type {
   Member,
   MemberRole,
@@ -37,6 +49,7 @@ import type {
   TaskColor,
   TaskStatus,
   UpdateTaskInput,
+  AssignmentHistoryItem,
 } from "@/types/dashboard";
 
 import { AppShell } from "./AppShell";
@@ -50,57 +63,62 @@ import { TaskEditModal } from "./TaskEditModal";
 function moveTaskBetweenMembers(
   members: Member[],
   taskId: string,
+  sourceMemberName: string,
   targetMemberName: string,
   partialUpdate?: Partial<Task>,
 ) {
-  let sourceTask: Task | null = null;
-  let fromMemberName = "";
-
-  const removed = members.map((member) => {
-    const found = member.tasks.find((task) => task.task_id === taskId);
-    if (!found) return member;
-
-    sourceTask = found;
-    fromMemberName = member.member_name;
-
-    return {
-      ...member,
-      tasks: member.tasks.filter((task) => task.task_id !== taskId),
-    };
-  });
+  const sourceTask = members
+    .flatMap((member) => member.tasks)
+    .find((task) => task.task_id === taskId);
 
   if (!sourceTask) return members;
-  const task: Task = sourceTask as Task;
 
-  return removed.map((member) => {
-    if (member.member_name !== targetMemberName) return member;
+  const currentNames = getAssigneeNames(sourceTask.assigned_to || sourceTask.assignee);
+  const nextNames = replaceAssigneeName(currentNames, sourceMemberName, targetMemberName);
+  const nextAssignedTo = joinAssigneeNames(nextNames);
+  const movedCapacities = moveAssigneeCapacity(
+    sourceTask.capacity_by_assignee,
+    sourceMemberName,
+    targetMemberName,
+    sourceTask.capacity_pct,
+  );
+  const nextCapacityByAssignee = normalizeAssigneeCapacities(nextNames, movedCapacities, sourceTask.capacity_pct);
+  const shouldAppendHistory = sourceMemberName && sourceMemberName !== targetMemberName;
+  const nextHistory = shouldAppendHistory
+    ? [
+      ...sourceTask.assignment_history,
+      {
+        from: sourceMemberName,
+        to: targetMemberName,
+        role: "担当変更" as const,
+        changed_at: formatNow(),
+      },
+    ]
+    : sourceTask.assignment_history;
 
-    const shouldAppendHistory = fromMemberName && fromMemberName !== targetMemberName;
-    const nextHistory = shouldAppendHistory
-      ? [
-        ...task.assignment_history,
-        {
-          from: fromMemberName,
-          to: targetMemberName,
-          role: "担当変更" as const,
-          changed_at: formatNow(),
-        },
-      ]
-      : task.assignment_history;
+  const movedTask: Task = {
+    ...sourceTask,
+    ...partialUpdate,
+    assignee: nextAssignedTo,
+    assigned_to: nextAssignedTo,
+    capacity_pct: getPrimaryCapacityPct(nextNames, nextCapacityByAssignee),
+    capacity_by_assignee: nextCapacityByAssignee,
+    flow_from: shouldAppendHistory ? sourceMemberName : partialUpdate?.flow_from ?? sourceTask.flow_from,
+    flow_to: partialUpdate?.flow_to ?? targetMemberName,
+    assignment_history: nextHistory,
+  };
 
-    const movedTask: Task = {
-      ...task,
-      ...partialUpdate,
-      assignee: targetMemberName,
-      assigned_to: targetMemberName,
-      flow_from: shouldAppendHistory ? fromMemberName : partialUpdate?.flow_from ?? task.flow_from,
-      flow_to: partialUpdate?.flow_to ?? targetMemberName,
-      assignment_history: nextHistory,
-    };
+  return members.map((member) => {
+    const shouldHaveTask = nextNames.includes(member.member_name);
+    const currentTasksWithoutMoved = member.tasks.filter((task) => task.task_id !== taskId);
+
+    if (!shouldHaveTask) {
+      return { ...member, tasks: currentTasksWithoutMoved };
+    }
 
     return {
       ...member,
-      tasks: [...member.tasks, movedTask],
+      tasks: [...currentTasksWithoutMoved, movedTask],
     };
   });
 }
@@ -110,10 +128,10 @@ function getFallbackMemberName(
   input: Pick<NewTaskInput, "assignee" | "leader" | "manager">,
 ) {
   return (
-    input.assignee ||
+    getPrimaryAssigneeName(input.assignee) ||
     input.leader ||
     input.manager ||
-    members.find((member) => inferRoleFromName(member.member_name) === "マネージャー")?.member_name ||
+    members.find((member) => member.role === "Lead")?.member_name ||
     members[0]?.member_name ||
     ""
   );
@@ -128,7 +146,7 @@ function insertMemberByRoleOrder(
   let insertIndex = members.length;
 
   for (let i = 0; i < members.length; i += 1) {
-    const currentRoleOrder = getRoleOrder(inferRoleFromName(members[i].member_name));
+    const currentRoleOrder = getRoleOrder(members[i].role);
     if (currentRoleOrder > targetRoleOrder) {
       insertIndex = i;
       break;
@@ -138,7 +156,59 @@ function insertMemberByRoleOrder(
   return [...members.slice(0, insertIndex), newMember, ...members.slice(insertIndex)];
 }
 
+function replaceTaskAcrossMembers(members: Member[], taskId: string, nextTask: Task) {
+  const nextAssigneeNames = getAssigneeNames(nextTask.assigned_to || nextTask.assignee);
+
+  return members.map((member) => {
+    const tasksWithoutTarget = member.tasks.filter((task) => task.task_id !== taskId);
+
+    if (!nextAssigneeNames.includes(member.member_name)) {
+      return { ...member, tasks: tasksWithoutTarget };
+    }
+
+    return {
+      ...member,
+      tasks: [...tasksWithoutTarget, nextTask],
+    };
+  });
+}
+
+function uniqueAssigneeNames(names: string[]) {
+  return Array.from(new Set(names.map((name) => name.trim()).filter(Boolean)));
+}
+
+function buildAssigneeEditHistory(input: {
+  beforeAssignees: string[];
+  afterAssignees: string[];
+  managerName: string;
+  leaderName: string;
+  changedAt: string;
+}): AssignmentHistoryItem[] {
+  const beforeAssignees = uniqueAssigneeNames(input.beforeAssignees);
+  const afterAssignees = uniqueAssigneeNames(input.afterAssignees);
+  const addedAssignees = afterAssignees.filter((name) => !beforeAssignees.includes(name));
+  const removedAssignees = beforeAssignees.filter((name) => !afterAssignees.includes(name));
+  const editorName = input.leaderName || input.managerName || "Lead";
+
+  return [
+    ...addedAssignees.map((name) => ({
+      from: editorName,
+      to: name,
+      role: "担当者追加" as const,
+      changed_at: input.changedAt,
+    })),
+    ...removedAssignees.map((name) => ({
+      from: name,
+      to: "担当解除",
+      role: "担当者解除" as const,
+      changed_at: input.changedAt,
+    })),
+  ];
+}
+
 export function DashboardBoard() {
+  const { showToast } = useToast();
+
   const {
     members,
     rawMembers,
@@ -158,16 +228,42 @@ export function DashboardBoard() {
   const [filterStatus, setFilterStatus] = useState<TaskStatus | "all">("all");
   const [roleFilter, setRoleFilter] = useState<MemberRole | "all">("all");
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
+  const [draggingSourceMemberName, setDraggingSourceMemberName] = useState<string | null>(null);
+  const [isMutating, setIsMutating] = useState(false);
+  const mutationInFlightRef = useRef(false);
+  const suppressRealtimeUntilRef = useRef(0);
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
+  const showBusyToast = () => {
+    showToast("処理中です。完了してから再度お試しください。", "info");
+  };
+
+  const markLocalMutation = () => {
+    suppressRealtimeUntilRef.current = Date.now() + 2500;
+  };
+
+  useEffect(() => {
+    const channel = subscribeToTasks(() => {
+      if (Date.now() < suppressRealtimeUntilRef.current) {
+        return;
+      }
+
+      showToast("他のユーザーがタスクを更新しました");
+    });
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [showToast]);
+
   const visibleMembers = useMemo(() => {
     const filteredByRole =
       roleFilter === "all"
         ? members
-        : members.filter((member) => inferRoleFromName(member.member_name) === roleFilter);
+        : members.filter((member) => member.role === roleFilter);
 
     return filteredByRole.map((member) => ({
       ...member,
@@ -200,22 +296,18 @@ export function DashboardBoard() {
 
   const sortedStatusSummary = useMemo(() => {
     return [...statusSummary]
-      .filter((row) => roleFilter === "all" || inferRoleFromName(row.member_name) === roleFilter)
+      .filter((row) => roleFilter === "all" || row.role === roleFilter)
       .sort((a, b) => {
-        const roleDiff =
-          getRoleOrder(inferRoleFromName(a.member_name)) -
-          getRoleOrder(inferRoleFromName(b.member_name));
+        const roleDiff = getRoleOrder(a.role) - getRoleOrder(b.role);
         return roleDiff || a.member_name.localeCompare(b.member_name, "ja");
       });
   }, [roleFilter, statusSummary]);
 
   const sortedCapacityMembers = useMemo(() => {
     return [...members]
-      .filter((member) => roleFilter === "all" || inferRoleFromName(member.member_name) === roleFilter)
+      .filter((member) => roleFilter === "all" || member.role === roleFilter)
       .sort((a, b) => {
-        const roleDiff =
-          getRoleOrder(inferRoleFromName(a.member_name)) -
-          getRoleOrder(inferRoleFromName(b.member_name));
+        const roleDiff = getRoleOrder(a.role) - getRoleOrder(b.role);
         return roleDiff || a.member_name.localeCompare(b.member_name, "ja");
       });
   }, [members, roleFilter]);
@@ -228,12 +320,21 @@ export function DashboardBoard() {
         member.member_id,
         member.tasks
           .filter((task) => task.status !== "完了")
-          .reduce((sum, task) => sum + (task.capacity_pct || 0), 0),
+          .reduce((sum, task) => sum + getCapacityForMember(task, member.member_name), 0),
       ]),
     );
   }, [members]);
 
   const handleDeleteTask = async (taskId: string) => {
+    if (mutationInFlightRef.current || isMutating) {
+      showBusyToast();
+      return;
+    }
+
+    mutationInFlightRef.current = true;
+    setIsMutating(true);
+    markLocalMutation();
+
     try {
       await deleteDashboardTask(taskId);
 
@@ -243,13 +344,26 @@ export function DashboardBoard() {
           tasks: member.tasks.filter((task) => task.task_id !== taskId),
         })),
       );
+      showToast("タスクを削除しました", "success");
     } catch (error) {
       console.error("❌ Supabaseエラー", error);
-      alert(error instanceof Error ? `削除失敗: ${error.message}` : "削除失敗");
+      showToast(error instanceof Error ? `削除失敗: ${error.message}` : "削除失敗", "error");
+    } finally {
+      mutationInFlightRef.current = false;
+      setIsMutating(false);
     }
   };
 
   const handleCompleteTask = async (taskId: string) => {
+    if (mutationInFlightRef.current || isMutating) {
+      showBusyToast();
+      return;
+    }
+
+    mutationInFlightRef.current = true;
+    setIsMutating(true);
+    markLocalMutation();
+
     const completedAt = formatNow();
 
     try {
@@ -270,13 +384,22 @@ export function DashboardBoard() {
           ),
         })),
       );
+      showToast("タスクを完了にしました", "success");
     } catch (error) {
       console.error("❌ Supabaseエラー", error);
-      alert(error instanceof Error ? `完了保存失敗: ${error.message}` : "完了保存失敗");
+      showToast(error instanceof Error ? `完了保存失敗: ${error.message}` : "完了保存失敗", "error");
+    } finally {
+      mutationInFlightRef.current = false;
+      setIsMutating(false);
     }
   };
 
   const handleDeleteMember = async (memberId: string) => {
+    if (mutationInFlightRef.current || isMutating) {
+      showBusyToast();
+      return;
+    }
+
     const targetMember = rawMembers.find((member) => member.member_id === memberId);
     if (!targetMember) return;
 
@@ -289,19 +412,33 @@ export function DashboardBoard() {
 
     if (!confirmed) return;
 
+    mutationInFlightRef.current = true;
+    setIsMutating(true);
+    markLocalMutation();
+
     try {
+      const soleAssigneeTaskCodes = targetMember.tasks
+        .filter((task) => getAssigneeNames(task.assigned_to || task.assignee).length <= 1)
+        .map((task) => task.task_id);
+
+      await removeMemberFromDashboardTaskAssignees(targetMember.member_name);
+
       await deleteDashboardMemberWithRelatedData({
         memberId: targetMember.member_id,
         memberName: targetMember.member_name,
-        taskCodes: targetMember.tasks.map((task) => task.task_id),
+        taskCodes: soleAssigneeTaskCodes,
       });
 
       setMembers(rawMembers.filter((member) => member.member_id !== memberId));
+      showToast("メンバーを削除しました", "success");
       window.dispatchEvent(new Event("dashboard-store-updated"));
       window.dispatchEvent(new Event("schedule-store-updated"));
     } catch (error) {
       console.error("❌ Supabaseエラー", error);
-      alert(error instanceof Error ? `メンバー削除失敗: ${error.message}` : "メンバー削除失敗");
+      showToast(error instanceof Error ? `メンバー削除失敗: ${error.message}` : "メンバー削除失敗", "error");
+    } finally {
+      mutationInFlightRef.current = false;
+      setIsMutating(false);
     }
   };
 
@@ -310,9 +447,28 @@ export function DashboardBoard() {
   };
 
   const handleAddTask = async (newTask: NewTaskInput) => {
+    if (mutationInFlightRef.current || isMutating) {
+      showBusyToast();
+      return;
+    }
+
+    mutationInFlightRef.current = true;
+    setIsMutating(true);
+    markLocalMutation();
+
+    const leadName = newTask.leader || newTask.manager;
     const projectColor = getProjectColor(newTask.project_name, projects);
-    const targetMemberName = getFallbackMemberName(rawMembers, newTask);
-    if (!targetMemberName) return;
+    const targetMemberName = getFallbackMemberName(rawMembers, {
+      ...newTask,
+      manager: leadName,
+      leader: leadName,
+    });
+
+    if (!targetMemberName) {
+      mutationInFlightRef.current = false;
+      setIsMutating(false);
+      return;
+    }
 
     try {
       const taskCode = await getNextTaskCodeFromSupabase();
@@ -324,20 +480,25 @@ export function DashboardBoard() {
         priority: newTask.priority,
         status: "未着手",
         progress_pct: 0,
-        manager: newTask.manager,
-        leader: newTask.leader,
+        manager: leadName,
+        leader: leadName,
         assignee: newTask.assignee,
         capacity_pct: newTask.capacity_pct,
+        capacity_by_assignee: newTask.capacity_by_assignee,
         assigned_to: newTask.assignee,
         description: newTask.description,
-        flow_from: newTask.leader || newTask.manager,
+        flow_from: leadName,
         flow_to: newTask.assignee,
         accentColor: projectColor.accentColor,
         color: projectColor.color,
         due_date: newTask.due_date,
         memo: newTask.memo,
         completed_at: null,
-        assignment_history: createInitialAssignmentHistory(newTask),
+        assignment_history: createInitialAssignmentHistory({
+          ...newTask,
+          manager: leadName,
+          leader: leadName,
+        }),
       };
 
       const insertedTask = await insertDashboardTask({
@@ -347,11 +508,12 @@ export function DashboardBoard() {
         priority: nextTask.priority,
         status: nextTask.status,
         progress_pct: nextTask.progress_pct,
-        manager_name: nextTask.manager,
-        leader_name: nextTask.leader,
+        manager_name: leadName,
+        leader_name: leadName,
         assignee_name: nextTask.assignee,
         assigned_to: nextTask.assigned_to,
         capacity_pct: nextTask.capacity_pct,
+        capacity_by_assignee: nextTask.capacity_by_assignee ?? {},
         description: nextTask.description,
         flow_from: nextTask.flow_from,
         flow_to: nextTask.flow_to,
@@ -373,24 +535,64 @@ export function DashboardBoard() {
           };
         }),
       );
+      window.dispatchEvent(new Event("dashboard-store-updated"));
+      showToast("タスクを追加しました", "success");
     } catch (error) {
       console.error("❌ Supabaseエラー", error);
-      alert(error instanceof Error ? `Supabaseエラー: ${error.message}` : "Supabaseエラー");
+      showToast(error instanceof Error ? `Supabaseエラー: ${error.message}` : "Supabaseエラー", "error");
+    } finally {
+      mutationInFlightRef.current = false;
+      setIsMutating(false);
     }
   };
 
   const handleUpdateTask = async (updatedTask: UpdateTaskInput) => {
+    if (mutationInFlightRef.current || isMutating) {
+      showBusyToast();
+      return;
+    }
+
+    mutationInFlightRef.current = true;
+    setIsMutating(true);
+    markLocalMutation();
+
+    const leadName = updatedTask.leader || updatedTask.manager;
     const projectColor = getProjectColor(updatedTask.project_name, projects);
     const currentTask = rawMembers
       .flatMap((member) => member.tasks)
       .find((task) => task.task_id === updatedTask.task_id);
 
-    if (!currentTask) return;
+    if (!currentTask) {
+      mutationInFlightRef.current = false;
+      setIsMutating(false);
+      return;
+    }
 
-    const targetMemberName = getFallbackMemberName(rawMembers, updatedTask);
-    if (!targetMemberName) return;
+    const nextAssigneeNames = uniqueAssigneeNames(getAssigneeNames(updatedTask.assignee));
+    const targetMemberName = getFallbackMemberName(rawMembers, {
+      ...updatedTask,
+      manager: leadName,
+      leader: leadName,
+    });
 
-    const nextTask: Partial<Task> = {
+    if (!targetMemberName || nextAssigneeNames.length === 0) {
+      mutationInFlightRef.current = false;
+      setIsMutating(false);
+      return;
+    }
+
+    const changedAt = formatNow();
+    const previousAssigneeNames = uniqueAssigneeNames(getAssigneeNames(currentTask.assigned_to || currentTask.assignee));
+    const assigneeEditHistory = buildAssigneeEditHistory({
+      beforeAssignees: previousAssigneeNames,
+      afterAssignees: nextAssigneeNames,
+      managerName: leadName,
+      leaderName: leadName,
+      changedAt,
+    });
+
+    const nextTask: Task = {
+      ...currentTask,
       task_name: updatedTask.task_name,
       project_name: updatedTask.project_name,
       priority: updatedTask.priority,
@@ -399,23 +601,25 @@ export function DashboardBoard() {
       memo: updatedTask.memo,
       status: updatedTask.status,
       progress_pct: updatedTask.progress_pct,
-      manager: updatedTask.manager,
-      leader: updatedTask.leader,
-      assignee: updatedTask.assignee,
-      assigned_to: updatedTask.assignee,
+      manager: leadName,
+      leader: leadName,
+      assignee: joinAssigneeNames(nextAssigneeNames),
+      assigned_to: joinAssigneeNames(nextAssigneeNames),
       capacity_pct: updatedTask.capacity_pct,
-      flow_from: updatedTask.leader || updatedTask.manager,
-      flow_to: updatedTask.assignee,
+      capacity_by_assignee: updatedTask.capacity_by_assignee,
+      flow_from:
+        assigneeEditHistory.length > 0
+          ? assigneeEditHistory[assigneeEditHistory.length - 1].from
+          : leadName,
+      flow_to:
+        assigneeEditHistory.length > 0
+          ? assigneeEditHistory[assigneeEditHistory.length - 1].to
+          : joinAssigneeNames(nextAssigneeNames),
       accentColor: projectColor.accentColor,
       color: projectColor.color,
-      completed_at: updatedTask.status === "完了" ? currentTask.completed_at ?? formatNow() : null,
+      completed_at: updatedTask.status === "完了" ? currentTask.completed_at ?? changedAt : null,
+      assignment_history: [...currentTask.assignment_history, ...assigneeEditHistory],
     };
-
-    const currentOwnerName = rawMembers.find((member) =>
-      member.tasks.some((task) => task.task_id === updatedTask.task_id),
-    )?.member_name;
-
-    const ownerChanged = currentOwnerName !== targetMemberName;
 
     try {
       const taskRow = await updateDashboardTaskByCode(updatedTask.task_id, {
@@ -427,51 +631,42 @@ export function DashboardBoard() {
         memo: updatedTask.memo,
         status: updatedTask.status,
         progress_pct: updatedTask.progress_pct,
-        manager_name: updatedTask.manager,
-        leader_name: updatedTask.leader,
-        assignee_name: updatedTask.assignee,
-        assigned_to: updatedTask.assignee,
+        manager_name: leadName,
+        leader_name: leadName,
+        assignee_name: joinAssigneeNames(nextAssigneeNames),
+        assigned_to: joinAssigneeNames(nextAssigneeNames),
         capacity_pct: updatedTask.capacity_pct,
-        flow_from: updatedTask.leader || updatedTask.manager,
-        flow_to: updatedTask.assignee,
+        capacity_by_assignee: updatedTask.capacity_by_assignee,
+        flow_from: nextTask.flow_from,
+        flow_to: nextTask.flow_to,
         accent_color: projectColor.accentColor,
         color: projectColor.color,
-        completed_at:
-          updatedTask.status === "完了" ? currentTask.completed_at ?? formatNow() : null,
+        completed_at: updatedTask.status === "完了" ? currentTask.completed_at ?? changedAt : null,
       });
 
-      if (ownerChanged && currentOwnerName) {
+      for (const history of assigneeEditHistory) {
         await insertSingleTaskAssignmentHistory({
           taskDbId: taskRow.id,
-          from_member_name: currentOwnerName,
-          to_member_name: targetMemberName,
-          assignment_role: "担当変更",
-          changed_at: formatNow(),
+          from_member_name: history.from,
+          to_member_name: history.to,
+          assignment_role: history.role,
+          changed_at: history.changed_at,
         });
       }
 
-      if (ownerChanged) {
-        setMembers(moveTaskBetweenMembers(rawMembers, updatedTask.task_id, targetMemberName, nextTask));
-      } else {
-        setMembers(
-          rawMembers.map((member) => ({
-            ...member,
-            tasks: member.tasks.map((task) =>
-              task.task_id === updatedTask.task_id
-                ? {
-                  ...task,
-                  ...nextTask,
-                }
-                : task,
-            ),
-          })),
-        );
-      }
+      nextTask.updated_at = taskRow.updated_at;
 
+      setMembers(replaceTaskAcrossMembers(rawMembers, updatedTask.task_id, nextTask));
+
+      window.dispatchEvent(new Event("dashboard-store-updated"));
+      showToast("タスクを更新しました", "success");
       setEditingTask(null);
     } catch (error) {
       console.error("❌ Supabaseエラー", error);
-      alert(error instanceof Error ? `Supabaseエラー: ${error.message}` : "Supabaseエラー");
+      showToast(error instanceof Error ? `Supabaseエラー: ${error.message}` : "Supabaseエラー", "error");
+    } finally {
+      mutationInFlightRef.current = false;
+      setIsMutating(false);
     }
   };
 
@@ -480,12 +675,22 @@ export function DashboardBoard() {
     member_role: string;
     columnColor: string;
   }) => {
+    if (mutationInFlightRef.current || isMutating) {
+      showBusyToast();
+      return;
+    }
+
+    mutationInFlightRef.current = true;
+    setIsMutating(true);
+    markLocalMutation();
+
     try {
       const memberCode = await getNextMemberCodeFromSupabase();
 
       const newMember: Member = {
         member_id: memberCode,
         member_name: input.member_name,
+        role: input.member_role as MemberRole,
         initials: getInitials(input.member_name),
         capacity_pct: 0,
         capacity_label: "0 件",
@@ -507,11 +712,15 @@ export function DashboardBoard() {
       });
 
       setMembers(insertMemberByRoleOrder(rawMembers, newMember, input.member_role as MemberRole));
+      showToast("メンバーを追加しました", "success");
       window.dispatchEvent(new Event("dashboard-store-updated"));
       window.dispatchEvent(new Event("schedule-store-updated"));
     } catch (error) {
       console.error("❌ Supabaseエラー", error);
-      alert(error instanceof Error ? `メンバー保存失敗: ${error.message}` : "メンバー保存失敗");
+      showToast(error instanceof Error ? `メンバー保存失敗: ${error.message}` : "メンバー保存失敗", "error");
+    } finally {
+      mutationInFlightRef.current = false;
+      setIsMutating(false);
     }
   };
 
@@ -520,6 +729,15 @@ export function DashboardBoard() {
     color: string;
     accentColor: string;
   }) => {
+    if (mutationInFlightRef.current || isMutating) {
+      showBusyToast();
+      return;
+    }
+
+    mutationInFlightRef.current = true;
+    setIsMutating(true);
+    markLocalMutation();
+
     try {
       const projectCode = await getNextProjectCodeFromSupabase();
 
@@ -540,18 +758,25 @@ export function DashboardBoard() {
           accentColor: input.accentColor,
         },
       ]);
+      showToast("プロジェクトを追加しました", "success");
     } catch (error) {
       console.error("❌ Supabaseエラー", error);
-      alert(error instanceof Error ? `プロジェクト保存失敗: ${error.message}` : "プロジェクト保存失敗");
+      showToast(error instanceof Error ? `プロジェクト保存失敗: ${error.message}` : "プロジェクト保存失敗", "error");
+    } finally {
+      mutationInFlightRef.current = false;
+      setIsMutating(false);
     }
   };
 
   const handleDropTaskToMember = async (targetMemberName: string) => {
-    if (!draggingTaskId) return;
+    if (mutationInFlightRef.current || isMutating) {
+      showBusyToast();
+      return;
+    }
 
-    const sourceMember = rawMembers.find((member) =>
-      member.tasks.some((task) => task.task_id === draggingTaskId),
-    );
+    if (!draggingTaskId || !draggingSourceMemberName) return;
+
+    const sourceMember = rawMembers.find((member) => member.member_name === draggingSourceMemberName);
 
     const currentTask = rawMembers
       .flatMap((member) => member.tasks)
@@ -559,28 +784,40 @@ export function DashboardBoard() {
 
     if (!sourceMember || !currentTask) {
       setDraggingTaskId(null);
+      setDraggingSourceMemberName(null);
       return;
     }
 
     if (sourceMember.member_name === targetMemberName) {
       setDraggingTaskId(null);
+      setDraggingSourceMemberName(null);
       return;
     }
+
+    mutationInFlightRef.current = true;
+    setIsMutating(true);
+    markLocalMutation();
 
     try {
       await updateDashboardTaskAssignee({
         taskCode: draggingTaskId,
-        sourceMemberName: sourceMember.member_name,
+        sourceMemberName: draggingSourceMemberName,
         targetMemberName,
         changedAt: formatNow(),
       });
 
-      setMembers(moveTaskBetweenMembers(rawMembers, draggingTaskId, targetMemberName));
+      window.dispatchEvent(new Event("dashboard-store-updated"));
+      showToast("担当者を変更しました", "success");
       setDraggingTaskId(null);
+      setDraggingSourceMemberName(null);
     } catch (error) {
       console.error("❌ Supabaseエラー", error);
-      alert(error instanceof Error ? `担当変更失敗: ${error.message}` : "担当変更失敗");
+      showToast(error instanceof Error ? `担当変更失敗: ${error.message}` : "担当変更失敗", "error");
       setDraggingTaskId(null);
+      setDraggingSourceMemberName(null);
+    } finally {
+      mutationInFlightRef.current = false;
+      setIsMutating(false);
     }
   };
 
@@ -668,8 +905,14 @@ export function DashboardBoard() {
               onDeleteMember={handleDeleteMember}
               onDropTask={handleDropTaskToMember}
               draggingTaskId={draggingTaskId}
-              onDragStartTask={setDraggingTaskId}
-              onDragEndTask={() => setDraggingTaskId(null)}
+              onDragStartTask={(taskId, sourceMemberName) => {
+                setDraggingTaskId(taskId);
+                setDraggingSourceMemberName(sourceMemberName);
+              }}
+              onDragEndTask={() => {
+                setDraggingTaskId(null);
+                setDraggingSourceMemberName(null);
+              }}
             />
           ))}
         </div>
@@ -695,7 +938,7 @@ export function DashboardBoard() {
               {sortedStatusSummary.map((row) => (
                 <tr key={row.member_name} className="odd:bg-white even:bg-slate-50/60">
                   <td className="border-b border-slate-100 px-4 py-3 text-slate-600">
-                    {inferRoleFromName(row.member_name)}
+                    {row.role}
                   </td>
                   <td className="border-b border-slate-100 px-4 py-3 font-bold text-slate-900">
                     {row.member_name}
@@ -739,7 +982,7 @@ export function DashboardBoard() {
                   <td className="border-b border-slate-100 px-4 py-3 font-bold text-slate-900">
                     {member.tasks
                       .filter((task) => task.status !== "完了")
-                      .reduce((sum, task) => sum + (task.capacity_pct || 0), 0)}
+                      .reduce((sum, task) => sum + getCapacityForMember(task, member.member_name), 0)}
                     %
                   </td>
                 </tr>

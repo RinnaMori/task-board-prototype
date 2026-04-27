@@ -1,6 +1,7 @@
 "use client";
 
 import type { Task } from "@/types/dashboard";
+import { getAssigneeNames, getCapacityForMember } from "@/lib/dashboard-assignees";
 import {
     formatDateTimeLabel,
     getDueLabel,
@@ -12,6 +13,7 @@ import { PriorityBadge, StatusBadge } from "./StatusBadge";
 
 type TaskCardProps = {
     task: Task;
+    currentMemberName: string;
     onEdit: (task: Task) => void;
     onDelete: (taskId: string) => void;
     onComplete: (taskId: string) => void;
@@ -22,6 +24,7 @@ type TaskCardProps = {
 
 export function TaskCard({
     task,
+    currentMemberName,
     onEdit,
     onDelete,
     onComplete,
@@ -33,6 +36,8 @@ export function TaskCard({
     const overdue = isOverdue(task);
     const recentlyCompleted = isTaskRecentlyCompleted(task);
     const isCompleted = task.status === "完了";
+    const assigneeNames = getAssigneeNames(task.assigned_to || task.assignee);
+    const memberCapacityPct = getCapacityForMember(task, currentMemberName);
 
     return (
         <article
@@ -68,10 +73,13 @@ export function TaskCard({
                 ) : null}
             </div>
 
-            <dl className="space-y-1.5 text-[12px] text-slate-600">
+            <dl className="space-y-2 text-[12px] text-slate-600">
+                {/* 👇 ここだけ変更 */}
                 <div className="flex justify-between gap-2">
                     <dt className="font-semibold text-slate-500">担当</dt>
-                    <dd className="truncate text-right font-semibold text-slate-800">{task.assignee || "未選択"}</dd>
+                    <dd className="text-right font-semibold text-slate-800">
+                        {assigneeNames.length > 0 ? assigneeNames.join(", ") : "未選択"}
+                    </dd>
                 </div>
 
                 <div className="flex justify-between gap-2">
@@ -80,8 +88,13 @@ export function TaskCard({
                 </div>
 
                 <div className="flex justify-between gap-2">
-                    <dt className="font-semibold text-slate-500">進捗</dt>
+                    <dt className="font-semibold text-slate-500">進捗（タスク共通）</dt>
                     <dd className="font-semibold text-slate-800">{task.progress_pct}%</dd>
+                </div>
+
+                <div className="flex justify-between gap-2">
+                    <dt className="font-semibold text-slate-500">キャパ（この担当者）</dt>
+                    <dd className="font-semibold text-slate-800">{memberCapacityPct}%</dd>
                 </div>
             </dl>
 

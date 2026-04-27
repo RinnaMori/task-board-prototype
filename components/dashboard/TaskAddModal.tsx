@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { PRIORITY_OPTIONS } from "@/lib/dashboard-store";
+import { getAssigneeNames, joinAssigneeNames, toNumberCapacity, toggleAssigneeName } from "@/lib/dashboard-assignees";
 import type { Member, NewTaskInput, Project, TaskPriority } from "@/types/dashboard";
 
 type TaskAddModalProps = {
@@ -12,8 +13,8 @@ type TaskAddModalProps = {
     onSubmit: (input: NewTaskInput) => void;
 };
 
-type TaskAddForm = Omit<NewTaskInput, "capacity_pct"> & {
-    capacity_pct: string;
+type TaskAddForm = Omit<NewTaskInput, "capacity_pct" | "capacity_by_assignee"> & {
+    capacity_by_assignee: Record<string, string>;
 };
 
 const initialForm: TaskAddForm = {
@@ -24,36 +25,86 @@ const initialForm: TaskAddForm = {
     manager: "",
     leader: "",
     assignee: "",
-    capacity_pct: "",
+    capacity_by_assignee: {},
     due_date: "",
     memo: "",
 };
 
-export function TaskAddModal({
-    isOpen,
-    onClose,
-    members,
-    projects,
-    onSubmit,
-}: TaskAddModalProps) {
+function toCapacityRecord(names: string[], values: Record<string, string>) {
+    const record: Record<string, number> = {};
+    names.forEach((name) => {
+        record[name] = toNumberCapacity(values[name] ?? 0);
+    });
+    return record;
+}
+
+function getPrimaryCapacity(names: string[], capacities: Record<string, number>) {
+    const first = names[0];
+    return first ? capacities[first] ?? 0 : 0;
+}
+
+export function TaskAddModal({ isOpen, onClose, members, projects, onSubmit }: TaskAddModalProps) {
     const [form, setForm] = useState<TaskAddForm>(initialForm);
 
     useEffect(() => {
         if (!isOpen) return;
 
-        const defaultManager = members[0]?.member_name ?? "";
+        const defaultLead =
+            members.find((member) => member.role === "Lead")?.member_name ??
+            members[0]?.member_name ??
+            "";
 
         setForm({
             ...initialForm,
             project_name: projects[0]?.project_name ?? "",
-            manager: defaultManager,
+            manager: defaultLead,
+            leader: defaultLead,
         });
     }, [isOpen, members, projects]);
+
+    const selectedAssigneeNames = useMemo(() => getAssigneeNames(form.assignee), [form.assignee]);
 
     if (!isOpen) return null;
 
     const handleChange = <K extends keyof TaskAddForm>(key: K, value: TaskAddForm[K]) => {
         setForm((prev) => ({ ...prev, [key]: value }));
+    };
+
+    const handleLeadChange = (value: string) => {
+        setForm((prev) => ({
+            ...prev,
+            manager: value,
+            leader: value,
+        }));
+    };
+
+    const handleToggleAssignee = (memberName: string) => {
+        const nextNames = toggleAssigneeName(selectedAssigneeNames, memberName);
+        setForm((prev) => {
+            const nextCapacities = { ...prev.capacity_by_assignee };
+            if (nextNames.includes(memberName) && nextCapacities[memberName] === undefined) {
+                nextCapacities[memberName] = "0";
+            }
+            if (!nextNames.includes(memberName)) {
+                delete nextCapacities[memberName];
+            }
+
+            return {
+                ...prev,
+                assignee: joinAssigneeNames(nextNames),
+                capacity_by_assignee: nextCapacities,
+            };
+        });
+    };
+
+    const handleCapacityChange = (memberName: string, value: string) => {
+        setForm((prev) => ({
+            ...prev,
+            capacity_by_assignee: {
+                ...prev.capacity_by_assignee,
+                [memberName]: value,
+            },
+        }));
     };
 
     const handleClose = () => {
@@ -64,12 +115,20 @@ export function TaskAddModal({
     const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
 
+        const leadName = form.leader || form.manager;
+        const assignee = joinAssigneeNames(selectedAssigneeNames);
+        const capacityByAssignee = toCapacityRecord(selectedAssigneeNames, form.capacity_by_assignee);
+
         onSubmit({
             ...form,
+            manager: leadName,
+            leader: leadName,
+            assignee,
             task_name: form.task_name.trim() || "名称未設定タスク",
             description: form.description.trim(),
             memo: form.memo.trim(),
-            capacity_pct: form.capacity_pct === "" ? 0 : Number(form.capacity_pct) || 0,
+            capacity_pct: getPrimaryCapacity(selectedAssigneeNames, capacityByAssignee),
+            capacity_by_assignee: capacityByAssignee,
         });
 
         handleClose();
@@ -77,12 +136,12 @@ export function TaskAddModal({
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-            <div className="w-full max-w-3xl rounded-[28px] bg-white p-6 shadow-2xl">
+            <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-[28px] bg-white p-6 shadow-2xl">
                 <div className="mb-6 flex items-start justify-between gap-4">
                     <div>
                         <h2 className="text-2xl font-extrabold text-slate-900">タスク追加</h2>
                         <p className="mt-1 text-sm font-medium text-slate-500">
-                            Leader / 担当者 / キャパは未選択でも追加できます
+                            Leadがタスクの差配元です。担当者は複数選択できます。
                         </p>
                     </div>
                     <button
@@ -153,70 +212,76 @@ export function TaskAddModal({
                         </label>
                     </div>
 
-                    <div className="grid gap-5 md:grid-cols-3">
-                        <label className="block">
-                            <span className="mb-2 block text-sm font-bold text-slate-700">Manager</span>
-                            <select
-                                value={form.manager}
-                                onChange={(event) => handleChange("manager", event.target.value)}
-                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
-                            >
-                                <option value="">未選択</option>
-                                {members.map((member) => (
-                                    <option key={member.member_id} value={member.member_name}>
-                                        {member.member_name}
-                                    </option>
-                                ))}
-                            </select>
-                        </label>
+                    <label className="block">
+                        <span className="mb-2 block text-sm font-bold text-slate-700">Lead</span>
+                        <select
+                            value={form.leader || form.manager}
+                            onChange={(event) => handleLeadChange(event.target.value)}
+                            className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
+                        >
+                            <option value="">未選択</option>
+                            {members.map((member) => (
+                                <option key={member.member_id} value={member.member_name}>
+                                    {member.member_name}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
 
-                        <label className="block">
-                            <span className="mb-2 block text-sm font-bold text-slate-700">Leader</span>
-                            <select
-                                value={form.leader}
-                                onChange={(event) => handleChange("leader", event.target.value)}
-                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
-                            >
-                                <option value="">未選択</option>
-                                {members.map((member) => (
-                                    <option key={member.member_id} value={member.member_name}>
-                                        {member.member_name}
-                                    </option>
-                                ))}
-                            </select>
-                        </label>
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                            <div>
+                                <p className="text-sm font-bold text-slate-700">担当者・個別キャパ</p>
+                                <p className="mt-1 text-xs font-medium text-slate-500">
+                                    進捗はタスク共通、キャパは担当者ごとに個別反映されます。
+                                </p>
+                            </div>
+                            <p className="rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-600">
+                                {selectedAssigneeNames.length}名選択中
+                            </p>
+                        </div>
 
-                        <label className="block">
-                            <span className="mb-2 block text-sm font-bold text-slate-700">担当者</span>
-                            <select
-                                value={form.assignee}
-                                onChange={(event) => handleChange("assignee", event.target.value)}
-                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
-                            >
-                                <option value="">未選択</option>
-                                {members.map((member) => (
-                                    <option key={member.member_id} value={member.member_name}>
-                                        {member.member_name}
-                                    </option>
-                                ))}
-                            </select>
-                        </label>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                            {members.map((member) => {
+                                const checked = selectedAssigneeNames.includes(member.member_name);
+
+                                return (
+                                    <div
+                                        key={member.member_id}
+                                        className="rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200"
+                                    >
+                                        <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={checked}
+                                                onChange={() => handleToggleAssignee(member.member_name)}
+                                                className="h-4 w-4 accent-slate-900"
+                                            />
+                                            <span>{member.member_name}</span>
+                                        </label>
+                                        {checked ? (
+                                            <label className="mt-2 block">
+                                                <span className="mb-1 block text-[11px] font-bold text-slate-500">
+                                                    この担当者のキャパ (%)
+                                                </span>
+                                                <input
+                                                    type="number"
+                                                    min={0}
+                                                    max={100}
+                                                    value={form.capacity_by_assignee[member.member_name] ?? ""}
+                                                    onChange={(event) => handleCapacityChange(member.member_name, event.target.value)}
+                                                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+                                                    placeholder="0"
+                                                />
+                                            </label>
+                                        ) : null}
+                                    </div>
+                                );
+                            })}
+                        </div>
                     </div>
 
-                    <div className="grid gap-5 md:grid-cols-3">
-                        <label className="block">
-                            <span className="mb-2 block text-sm font-bold text-slate-700">キャパ (%)</span>
-                            <input
-                                type="number"
-                                min={0}
-                                max={100}
-                                value={form.capacity_pct}
-                                onChange={(event) => handleChange("capacity_pct", event.target.value)}
-                                placeholder="未選択"
-                                className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
-                            />
-                        </label>
-
+                    <div className="grid gap-5 md:grid-cols-2">
                         <label className="block">
                             <span className="mb-2 block text-sm font-bold text-slate-700">期日</span>
                             <input
@@ -234,7 +299,7 @@ export function TaskAddModal({
                                 value={form.memo}
                                 onChange={(event) => handleChange("memo", event.target.value)}
                                 className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-slate-400"
-                                maxLength={120}
+                                maxLength={80}
                             />
                         </label>
                     </div>
@@ -243,11 +308,10 @@ export function TaskAddModal({
                         <button
                             type="button"
                             onClick={handleClose}
-                            className="rounded-2xl border border-slate-200 px-5 py-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+                            className="rounded-2xl border border-slate-200 px-5 py-3 text-sm font-bold text-slate-600 transition hover:bg-slate-50"
                         >
                             キャンセル
                         </button>
-
                         <button
                             type="submit"
                             className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white transition hover:bg-slate-700"
